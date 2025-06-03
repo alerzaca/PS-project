@@ -3,40 +3,35 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 
-#define PORT 8080
+#define TCP_PORT 8080               // Port TCP, na którym serwer będzie obsługiwał chat
+#define MULTICAST_PORT 12345        // Port UDP multicast, na którym serwer będzie się ogłaszał
+#define MULTICAST_GROUP "239.0.0.1" // Adres grupy multicast, na której serwer będzie się ogłaszał
+
+#define MAX_ROOMS 10                // Maksymalna liczba buforowanych pokoi czatu
+#define BUFFER_SIZE 1024            // Rozmiar bufora do odbierania wiadomości
+
+struct room {
+    char name[50];                  // Nazwa pokoju
+    char address[INET_ADDRSTRLEN];  // Adres IP serwera czatu
+    int port;                       // Port serwera czatu
+};
+
+int room_count = 0;                // Liczba pokoi czatu
+
+void listen_for_rooms() {}
+
+void connect_to_room() {}
+
+void chat_in_room() {}
 
 int main() {
-    int sock = 0;
-    struct sockaddr_in serv_addr;
-    char *hello = "Hello from client";
-    char buffer[1024] = {0};
-
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        printf("Błąd tworzenia gniazda\n");
-        return -1;
+    listen_for_rooms();
+    int room_id = choose_room();
+    if (room_id >= 0) {
+        chat_with_room(room_id);
     }
-
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(PORT);
-
-    // Konwersja adresu IP
-    if(inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
-        printf("Nieprawidłowy adres / Adres nie wspierany\n");
-        return -1;
-    }
-
-    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        printf("Połączenie nieudane\n");
-        return -1;
-    }
-
-    send(sock, hello, strlen(hello), 0);
-    printf("Wiadomość wysłana\n");
-    read(sock, buffer, 1024);
-    printf("Odpowiedź serwera: %s\n", buffer);
-
-    close(sock);
     return 0;
 }
