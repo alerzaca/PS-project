@@ -4,31 +4,47 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <pthread.h>
+#include <time.h>
 
-#define TCP_PORT 8080               // Port TCP, na którym serwer będzie obsługiwał chat
-#define MULTICAST_PORT 12345        // Port UDP multicast, na którym serwer będzie się ogłaszał
 #define MULTICAST_GROUP "239.0.0.1" // Adres grupy multicast, na której serwer będzie się ogłaszał
-#define ROOM_NAME "Chatroom"         // Nazwa pokoju czatu, docelowo będzie podawana jako argument wywołania programu serwera
+#define MULTICAST_PORT 12345        // Port UDP multicast, na którym serwer będzie się ogłaszał
+#define TCP_PORT 8080               // Port TCP, na którym serwer będzie obsługiwał chat
 
 #define BACKLOG 3                   // Maksymalna liczba oczekujących połączeń
 #define MAX_CLIENTS 10              // Maksymalna liczba jednocześnie połączonych klientów
+#define SERVER_ID_LEN 7             // 6 znaków + '\0'
 
-void multicast_broadcast(void *arg) {
+// Generowanie prostego unikalnego ID na podstawie czasu i PID
+void generate_id(char *id, size_t size) {
+    unsigned int hash = (unsigned int)time(NULL) ^ (unsigned int)getpid();
+    snprintf(id, size, "%06X", hash % 0xFFFFFF); // np. "A1B2C3"
+}
+
+// Struktura argumentów dla wątku multicast
+struct thread_args {
+    char server_name[128];
+    char server_id[SERVER_ID_LEN];
+    char ip[INET_ADDRSTRLEN];
+};
+
+// Wątek rozgłaszania multicast
+void* multicast_broadcast(void *arg) {
+    struct thread_args *targs = (struct thread_args*)arg;
+    char *server_name = targs->server_name;
+    char *server_id = targs->server_id;
+    char *ip = targs->ip;
+
     int sock;
     struct sockaddr_in addr;
     char message[256];
 
-    // Przygotowanie wiadomości o serwerze do rozgłoszenia
-    char ip[INET_ADDRSTRLEN];
-    struct in_addr local_addr;
-    local_addr.s_addr = htonl(INADDR_ANY); // dodać tu rzeczywisty adres IP serwera
-    inet_ntop(AF_INET, &local_addr, ip, INET_ADDRSTRLEN);
-    sprintf(message, "Room %s is online on address %s:%d", ROOM_NAME, ip, TCP_PORT);
-
     // Tworzenie gniazda UDP
     if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         perror("UDP socket error");
-        exit(EXIT_FAILURE);
+        pthread_exit(NULL);
     }
 
     // Konfiguracja adresu multicast
@@ -39,29 +55,75 @@ void multicast_broadcast(void *arg) {
 
     // Rozgłaszanie informacji o serwerze co 5 sekund
     while(1) {
+        // Przygotowanie wiadomości do rozgłoszenia
+        // Format: <ID>:<Name>:<IP>:<Port>
+        snprintf(message, sizeof(message), "%s:%s:%s:%d", server_id, server_name, ip, TCP_PORT);
+
         if (sendto(sock, message, strlen(message), 0, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
             perror("sendto error");
             close(sock);
-            exit(EXIT_FAILURE);
+            pthread_exit(NULL);
         }
-        printf("Broadcasting message: \'%s\'\n", message);
+        
+        // Można odkomentować poniższą linię, aby zobaczyć wysyłane wiadomości, ale szybko może to zapełnić konsolę
+        //printf("[Multicast message]: '%s'\n", message);
         sleep(5);
     }
 
     close(sock);
-    exit(EXIT_SUCCESS);
+    pthread_exit(NULL);
 }
 
-int main() {
-    int server_fd, new_socket;              // deskryptory gniazd: serwer i klient
-    int activity, i, valread, sd;           // zmienne do obsługi aktywności gniazd
-    struct sockaddr_in address;             // struktura przechowująca adres IP i port
-    int opt = 1;                            // wartość do ustawienia opcji gniazda
-    int addrlen = sizeof(address);          // długość struktury adresu
-    char buffer[1024] = {0};                // bufor do przechowywania odebranych danych
-    int client_socket[MAX_CLIENTS] = {0};   // tablica do przechowywania deskryptorów gniazd klientów
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <server_name> <network interface>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
 
-    fd_set readfds;     // zbiór deskryptorów gniazd do monitorowania przez select
+    char *server_name = argv[1];
+    char *ifname = argv[2];
+    char ip[INET_ADDRSTRLEN] = "0.0.0.0";
+
+    // Pobieranie adresu IP interfejsu sieciowego
+    struct ifaddrs *ifaddr, *ifa;
+    if (getifaddrs(&ifaddr) == -1) {
+        perror("getifaddrs");
+        exit(EXIT_FAILURE);
+    }
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr &&
+            ifa->ifa_addr->sa_family == AF_INET &&
+            strcmp(ifa->ifa_name, ifname) == 0) {
+            struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
+            inet_ntop(AF_INET, &sa->sin_addr, ip, sizeof(ip));
+            break;
+        }
+    }
+    freeifaddrs(ifaddr);
+
+    // Obliczenie unikalnego ID serwera
+    char server_id[SERVER_ID_LEN];
+    generate_id(server_id, sizeof(server_id));
+
+    // Przygotowanie argumentów do wątku
+    struct thread_args *targs = malloc(sizeof(struct thread_args));
+    strncpy(targs->server_name, server_name, sizeof(targs->server_name)-1);
+    strncpy(targs->server_id, server_id, sizeof(targs->server_id)-1);
+    strncpy(targs->ip, ip, INET_ADDRSTRLEN);
+
+    // Uruchomienie nowego wątku multicast
+    pthread_t multicast_thread;
+    if (pthread_create(&multicast_thread, NULL, multicast_broadcast, targs) != 0) {
+        perror("pthread_create");
+        free(targs);
+        return 1;
+    }
+
+    // Inicjalizacja gniazda TCP
+    int server_fd, new_socket;
+    struct sockaddr_in server_addr, client_addr;
+    int opt = 1;
+    char buffer[1024];
 
     // Tworzenie gniazda
     // AF_INET - IPv4, SOCK_STREAM - TCP, 0 - domyślny protokół
@@ -79,106 +141,54 @@ int main() {
     }
 
     // Konfiguracja adresu serwera
-    memset(&address, 0, sizeof(address));   // zerowanie struktury adresu na wszelki wypadek
-    address.sin_family = AF_INET;           // rodzina adresów IPv4
-    address.sin_addr.s_addr = INADDR_ANY;   // akceptowanie połączeń na dowolnym interfejsie
-    address.sin_port = htons(PORT);         // port w formacie sieciowym (big-endian)
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(TCP_PORT);
 
     // Bind - przypisanie gniazda do adresu i portu
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         perror("bind error");
         exit(EXIT_FAILURE);
     }
 
-    // Uruchomienie wątku do rozgłaszania informacji o serwerze
-    pthread_t multicast_thread;
+    printf("Server opened as '%s' [ID: %s] on port %d \n", server_name, server_id, TCP_PORT);
 
-    if (pthread_create(&multicast_thread, NULL, (void *)multicast_broadcast, NULL) != 0) {
-        perror("pthread_create error");
-        exit(EXIT_FAILURE);
-    }
-
-    // Listen - nasłuchiwanie na połączenia przychodzące
+    // Listen
     if (listen(server_fd, BACKLOG) < 0) {
         perror("listen error");
         exit(EXIT_FAILURE);
     }
 
-    printf("Chatroom opened on address %s and port %d\n", inet_ntoa(address.sin_addr), PORT);
-
     // Główna pętla serwera
-    while(1) {
-        FD_ZERO(&readfds);            // zerowanie zbioru deskryptorów
-        FD_SET(server_fd, &readfds);  // dodanie gniazda serwera do zbioru do monitorowania
-        int max_sd = server_fd;       // maksymalny deskryptor gniazda, początkowo serwer
+    while (1) {
+        socklen_t client_addrlen = sizeof(client_addr);
 
-        // Dodanie deskryptorów klientów do monitorowego zbioru
-        for (i = 0; i < MAX_CLIENTS; i++) {
-            sd = client_socket[i];
-            if (sd > 0) FD_SET(sd, &readfds);
-            if (sd > max_sd) max_sd = sd;       // aktualizacja maksymalnego deskryptora
+        if ((new_socket = accept(server_fd, (struct sockaddr *)&client_addr, (socklen_t*)&client_addrlen)) < 0) {
+            perror("accept error");
+            continue;
         }
 
-        // Czekanie na aktywność w którymkolwiek z gniazd (operacja blokująca)
-        activity = select(max_sd + 1, &readfds, NULL, NULL, NULL);
-        if ((activity < 0) && (errno != EINTR)) {
-            perror("select error");
+        // Pobranie adresu IP i portu klienta
+        char client_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
+        int client_port = ntohs(client_addr.sin_port);
+
+        printf("New connection from %s:%d\n", client_ip, client_port);
+
+        int valread;
+        while ((valread = read(new_socket, buffer, sizeof(buffer)-1)) > 0) {
+            buffer[valread] = '\0';
+            printf("Message received from %s:%d: %s", client_ip, client_port, buffer);
+            send(new_socket, buffer, valread, 0);
         }
-
-        // Aktywność na gnieździe serwera oznacza nowe połączenie
-        // FD_ISSET sprawdza, czy deskryptor gniazda serwera jest gotowy do odczytu, jeśli tak, to akceptujemy to połączenie
-        if (FD_ISSET(server_fd, &readfds)) {
-            if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
-                perror("accept error");
-                exit(EXIT_FAILURE);
-            }
-
-            printf("New connection from %s:%d\n", inet_ntoa(address.sin_addr), ntohs(address.sin_port));
-
-            // Dodanie nowego klienta do tablicy deskryptorów
-            for (i = 0; i < MAX_CLIENTS; i++) {
-                if (client_socket[i] == 0) {
-                    client_socket[i] = new_socket;
-                    printf("Client added on index %d\n", i);
-                    break;
-                }
-            }
-        }
-
-        // Obsługa aktywnych klientów
-        for (i = 0; i < MAX_CLIENTS; i++) {
-            sd = client_socket[i];
-
-            if (FD_ISSET(sd, &readfds)) {
-                
-                // Odbieranie danych od klienta
-                if((valread = read(sd, buffer, sizeof(buffer))) == 0) {
-                    
-                    // Połączenie zamknięte przez klienta
-                    getpeername(sd, (struct sockaddr*)&address, (socklen_t*)&addrlen);
-                    printf("Connection closed on %s:%d\n", inet_ntoa(address.sin_addr), ntohs(address.sin_port));
-                   
-                    close(sd);                  // zamknięcie gniazda klienta
-                    client_socket[i] = 0;       // usunięcie klienta z tablicy
-               
-                } else {
-                    
-                    // Dane odebrano pomyślnie
-                    buffer[valread] = '\0';     // zakończenie ciągu znaków
-                    printf("Data from %d: \'%s\'\n", sd, buffer);
-
-                    // Podanie wiadomości dalej do wszystkich klientów z wyjątkiem nadawcy
-                    for (int j = 0; j < MAX_CLIENTS; j++) {
-                        if (client_socket[j] > 0 && client_socket[j] != sd) {
-                            send(client_socket[j], buffer, strlen(buffer), 0);
-                        }
-                    }
-                }
-            }
-
-        }
+        printf("Client %s:%d disconnected\n", client_ip, client_port);
+        close(new_socket);
     }
 
+    pthread_cancel(multicast_thread);
     pthread_join(multicast_thread, NULL);
+    close(server_fd);
+    free(targs);
     return 0;
 }
