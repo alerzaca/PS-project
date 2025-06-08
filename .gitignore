@@ -1,3 +1,6 @@
 # Ignore compiled files
 client
 server
+
+# Ignore database files
+*.db
