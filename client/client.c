@@ -119,13 +119,15 @@ void connect_to_server(const char *server_id, const char *ip, int port) {
 
     printf("Connected to server [%s] (%s:%d)\n", server_id, ip, port);
 
-    // Prosty echo chat: wysyłanie i odbieranie wiadomości
+    // Prosty chat: wysyłanie i odbieranie wiadomości
     char buffer[BUFFER_SIZE];
     fd_set readfds;
     while (1) {
         FD_ZERO(&readfds);
         FD_SET(STDIN_FILENO, &readfds);
         FD_SET(sock, &readfds);
+
+        // Ustawienie maksymalnego deskryptora pliku do select
         int maxfd = sock > STDIN_FILENO ? sock : STDIN_FILENO;
         select(maxfd+1, &readfds, NULL, NULL, NULL);
 
@@ -134,20 +136,25 @@ void connect_to_server(const char *server_id, const char *ip, int port) {
             if (fgets(buffer, sizeof(buffer), stdin) == NULL) break;
             send(sock, buffer, strlen(buffer), 0);
         }
-        // Odbiór wiadomości z serwera i wyświetlenie
+        
+        // Sprawdzenie, czy gniazdo serwera jest gotowe do odczytu
+        // jeśli tak, to odbieramy wiadomość
         if (FD_ISSET(sock, &readfds)) {
             int n = recv(sock, buffer, sizeof(buffer)-1, 0);
+
+            // Sprawdzenie błędów odczytu, jeśli n <= 0, to wystąpił błąd lub serwer zamknął połączenie
             if (n <= 0) {
                 printf("Disconnected from server\n");
                 break;
             }
+
+            // Dodanie znaku końca łańcucha i wyświetlenie wiadomości
             buffer[n] = '\0';
-            printf("[echo] %s", buffer);
+            printf("%s", buffer);
         }
     }
     close(sock);
 }
-
 
 int main(int argc, char *argv[]) {
     // Tryb wyszukiwania serwerów przez multicast
