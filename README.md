@@ -17,6 +17,6 @@ How to run:
 ```
 ./client search
 ./client connect <login|register> <ID> <IP> <PORT>
-./client connect upload <ID> <IP> <PORT> <filename to upload>
-./client connect download <ID> <IP> <PORT> <filename to download>
+./client upload <ID> <IP> <PORT> <filename to upload>
+./client download <ID> <IP> <PORT> <filename to download>
 ```
