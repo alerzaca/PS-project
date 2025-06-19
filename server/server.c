@@ -118,6 +118,11 @@ int main(int argc, char *argv[]) {
             exit(1);
         }
 
+        // Tworzenie folderu wspłdzielonego
+        char shared_dir[512];
+        snprintf(shared_dir, sizeof(shared_dir), "shared/%s", server_name);
+        mkdir(shared_dir, 0755);
+
         // Tworzenie tabeli informacyjnej
         const char *sql =
             "CREATE TABLE server_info ("
@@ -445,6 +450,64 @@ int main(int argc, char *argv[]) {
                             }
                             sqlite3_finalize(stmt);
                             continue;
+                        }
+
+                        // Wysłanie pliku na serwer
+                        if (strncmp(buffer, "UPLOAD ", 7) == 0) {
+                            char filename[256];
+                            int filesize;
+                            if (sscanf(buffer + 7, "%255s %d", filename, &filesize) != 2) {
+                                send(sd, "UPLOAD_FAIL\n", 12, 0);
+                                continue;
+                            }
+                            char filepath[512];
+                            snprintf(filepath, sizeof(filepath), "shared/%s/%s", server_name, filename);
+                            FILE *file = fopen(filepath, "wb");
+                            if (!file) {
+                                send(sd, "UPLOAD_FAIL\n", 12, 0);
+                                continue;
+                            }
+                            send(sd, "UPLOAD_OK\n", 10, 0);
+                            
+                            // Odbierz plik
+                            int total = 0;
+                            while (total < filesize) {
+                                int n = read(sd, buffer, BUFFER_SIZE);
+                                if (n <= 0) break;
+                                fwrite(buffer, 1, n, file);
+                                total += n;
+                            }
+                            fclose(file);
+                            send(sd, "UPLOAD_OK\n", 10, 0);
+                        }
+                        
+                        // Pobranie pliku z serwera
+                        if (strncmp(buffer, "DOWNLOAD ", 9) == 0) {
+                            char filename[256];
+                            if (sscanf(buffer + 9, "%255s", filename) != 1) {
+                                send(sd, "DOWNLOAD_FAIL\n", 14, 0);
+                                continue;
+                            }
+                            char filepath[512];
+                            snprintf(filepath, sizeof(filepath), "shared/%s/%s", server_name, filename);
+                            FILE *file = fopen(filepath, "rb");
+                            if (!file) {
+                                send(sd, "DOWNLOAD_FAIL\n", 14, 0);
+                                continue;
+                            }
+                            // Pobierz rozmiar pliku
+                            fseek(file, 0, SEEK_END);
+                            int filesize = ftell(file);
+                            fseek(file, 0, SEEK_SET);
+                            // Wyślij rozmiar pliku
+                            snprintf(buffer, BUFFER_SIZE, "DOWNLOAD %d\n", filesize);
+                            send(sd, buffer, strlen(buffer), 0);
+                            // Wyślij plik
+                            int n;
+                            while ((n = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
+                                send(sd, buffer, n, 0);
+                            }
+                            fclose(file);
                         }
 
                         // Pobranie adresu IP klienta i portu

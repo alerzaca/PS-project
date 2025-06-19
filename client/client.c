@@ -226,6 +226,107 @@ int main(int argc, char *argv[]) {
         }
 
     }
+    // Wysłanie pliku na serwer / Pobranie pliku z serwera
+    else if ((argc == 6) && (strcmp(argv[1], "upload") == 0 || strcmp(argv[1], "download") == 0)) {
+        const char *mode = argv[1];
+        const char *server_id = argv[2];
+        const char *ip = argv[3];
+        int port = atoi(argv[4]);
+        const char *filename = argv[5];
+
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in serv_addr;
+        memset(&serv_addr, 0, sizeof(serv_addr));
+        serv_addr.sin_family = AF_INET;
+        serv_addr.sin_port = htons(port);
+        inet_pton(AF_INET, ip, &serv_addr.sin_addr);
+
+        if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
+            perror("connect error");
+            return 1;
+        }
+
+        // Pobierz username i password (jak dotychczas)
+        char username[64], password[64], buffer[BUFFER_SIZE];
+        printf("Username: ");
+        fgets(username, sizeof(username), stdin);
+        username[strcspn(username, "\n")] = '\0';
+        char *password_ptr = getpass("Password: ");
+        strncpy(password, password_ptr, sizeof(password)-1);
+        password[sizeof(password)-1] = '\0';
+
+        // Wyślij LOGIN
+        snprintf(buffer, sizeof(buffer), "LOGIN %s %s\n", username, password);
+        send(sock, buffer, strlen(buffer), 0);
+
+        // Odczytaj odpowiedź serwera
+        int n = recv(sock, buffer, sizeof(buffer)-1, 0);
+        if (n <= 0 || strncmp(buffer, "LOGIN_OK\n", 9) != 0) {
+            printf("Login failed\n");
+            close(sock);
+            return 1;
+        }
+
+        // Obsługa upload/download
+        if (strcmp(mode, "upload") == 0) {
+            FILE *file = fopen(filename, "rb");
+            if (!file) {
+                perror("fopen");
+                close(sock);
+                return 1;
+            }
+            fseek(file, 0, SEEK_END);
+            int filesize = ftell(file);
+            fseek(file, 0, SEEK_SET);
+            snprintf(buffer, sizeof(buffer), "UPLOAD %s %d\n", filename, filesize);
+            send(sock, buffer, strlen(buffer), 0);
+            n = recv(sock, buffer, sizeof(buffer)-1, 0);
+            if (n <= 0 || strncmp(buffer, "UPLOAD_OK", 9) != 0) {
+                printf("Upload failed\n");
+                fclose(file);
+                close(sock);
+                return 1;
+            }
+            while ((n = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
+                send(sock, buffer, n, 0);
+            }
+            fclose(file);
+            printf("File uploaded successfully\n");
+        }
+        else if (strcmp(mode, "download") == 0) {
+            snprintf(buffer, sizeof(buffer), "DOWNLOAD %s\n", filename);
+            send(sock, buffer, strlen(buffer), 0);
+            n = recv(sock, buffer, sizeof(buffer)-1, 0);
+            if (n <= 0) {
+                printf("Download failed\n");
+                close(sock);
+                return 1;
+            }
+            int filesize;
+            if (sscanf(buffer, "DOWNLOAD %d", &filesize) != 1) {
+                printf("Download failed\n");
+                close(sock);
+                return 1;
+            }
+            FILE *file = fopen(filename, "wb");
+            if (!file) {
+                perror("fopen");
+                close(sock);
+                return 1;
+            }
+            int total = 0;
+            while (total < filesize) {
+                n = recv(sock, buffer, BUFFER_SIZE, 0);
+                if (n <= 0) break;
+                fwrite(buffer, 1, n, file);
+                total += n;
+            }
+            fclose(file);
+            printf("File downloaded successfully\n");
+        }
+        close(sock);
+        return 0;
+    }
     // Nieprawidłowe wywołanie programu
     else {
         printf("Usage:\n");
