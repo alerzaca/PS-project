@@ -3,7 +3,7 @@ Final project for network programming course.
 
 How to compile:
 ```
-gcc server.c -o server -lpthread
+gcc server.c -o server -lpthread -lsqlite3
 gcc client.c -o client
 ```
 
