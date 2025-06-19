@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <sqlite3.h>
 #include <sys/stat.h>
+#include <string.h>
 
 #define MULTICAST_GROUP "239.0.0.1" // Adres grupy multicast, na której serwer będzie się ogłaszał
 #define MULTICAST_PORT 12345        // Port UDP multicast, na którym serwer będzie się ogłaszał
@@ -101,7 +102,11 @@ int main(int argc, char *argv[]) {
         snprintf(dbfile, sizeof(dbfile), "%s.db", server_name);
 
         if (file_exists(dbfile)) {
-            fprintf(stderr, "Database '%s' already exists. Run server using ./server start <name> or choose other name for your new server instance.\n", dbfile);
+            char dbfile_wout_db[256];
+            int len = strlen(dbfile);
+            strncpy(dbfile_wout_db, dbfile, len - 3);
+            dbfile_wout_db[len - 3] = '\0';
+            fprintf(stderr, "Database '%s' already exists. Run server using './server start %s' or choose other name for your new server instance.\n", dbfile, dbfile_wout_db);
             exit(1);
         }
 
@@ -163,7 +168,11 @@ int main(int argc, char *argv[]) {
 
         // Sprawdzenie, czy plik bazy danych istnieje
         if (!file_exists(dbfile)) {
-            fprintf(stderr, "Database for server (%s) does not exist. To create a new server with that name use ./server create <name>\n", dbfile);
+            char dbfile_wout_db[256];
+            int len = strlen(dbfile);
+            strncpy(dbfile_wout_db, dbfile, len - 3);
+            dbfile_wout_db[len - 3] = '\0';
+            fprintf(stderr, "Database for server (%s) does not exist. To create a new server with that name use './server create %s'\n", dbfile, dbfile_wout_db);
             exit(1);
         }
 
