@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <ifaddrs.h>
+#include <unistd.h>                     // Na potrzeby getpass do bezwyświetleniowego pozyskiwania hasła od użytkownika
 
 #define MULTICAST_GROUP "239.0.0.1"     // Adres grupy multicast, na której serwer będzie się ogłaszał
 #define MULTICAST_PORT 12345            // Port UDP multicast, na którym serwer będzie się ogłaszał
@@ -34,7 +35,6 @@ void add_server(const char *id, const char *name, const char *ip, int port) {
         strncpy(servers[server_count].ip, ip, sizeof(servers[server_count].ip));
         servers[server_count].port = port;
         server_count++;
-        printf("id: %s", id); //test
         printf("Server found: %s [ID: %s] on %s:%d\n", name, id, ip, port);
     }
 }
@@ -125,10 +125,10 @@ void connect_to_server(const char *mode, const char *server_id, const char *ip, 
     printf("Username: ");
     fgets(username, sizeof(username), stdin);
     username[strcspn(username, "\n")] = '\0';
-
-    printf("Password: ");
-    fgets(password, sizeof(password), stdin);
-    password[strcspn(password, "\n")] = '\0';
+    // Hasło wpisywane przez użytkownika nie wyświetla się w konsoli
+    char *password_ptr = getpass("Password: ");
+    strncpy(password, password_ptr, sizeof(password) - 1);
+    password[sizeof(password) - 1] = '\0';
 
     // Wysyłamy komendę: "LOGIN <login> <hasło>" lub "REGISTER <login> <hasło>"
     snprintf(buffer, sizeof(buffer), "%s %s %s\n", 
