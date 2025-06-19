@@ -332,6 +332,8 @@ int main(int argc, char *argv[]) {
         printf("Usage:\n");
         printf("  %s search\n", argv[0]);
         printf("  %s connect <login|register> <ID> <IP> <PORT>\n", argv[0]);
+        printf("  %s connect upload <ID> <IP> <PORT> <filename to upload>\n", argv[0]);
+        printf("  %s connect download <ID> <IP> <PORT> <filename to download>\n", argv[0]);
     }
     return 0;
 }
