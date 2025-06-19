@@ -29,6 +29,19 @@ int file_exists(const char *filename) {
     return (stat(filename, &buffer) == 0);
 }
 
+// Funkcja sprawdzająca, czy istnieje odpowiednia struktura folderu wspłdzielonego
+void ensure_shared_folders(const char *server_name) {
+    struct stat st = {0};
+    if (stat("shared", &st) == -1) {
+        mkdir("shared", 0755);
+    }
+    char shared_dir[512];
+    snprintf(shared_dir, sizeof(shared_dir), "shared/%s", server_name);
+    if (stat(shared_dir, &st) == -1) {
+        mkdir(shared_dir, 0755);
+    }
+}
+
 // Funkcja do pobierania aktualnej daty i czasu w formacie YYYY-MM-DD HH:MM:SS
 void get_current_datetime(char *buf, size_t len) {
     time_t now = time(NULL);
@@ -117,11 +130,6 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "create database error: %s\n", sqlite3_errmsg(db));
             exit(1);
         }
-
-        // Tworzenie folderu wspłdzielonego
-        char shared_dir[512];
-        snprintf(shared_dir, sizeof(shared_dir), "shared/%s", server_name);
-        mkdir(shared_dir, 0755);
 
         // Tworzenie tabeli informacyjnej
         const char *sql =
@@ -222,6 +230,9 @@ int main(int argc, char *argv[]) {
             sqlite3_close(db);
             exit(1);
         }
+
+        // Przygotowanie folderu wspłdzielonego
+        ensure_shared_folders(server_name);
 
         // Informacja o pomyślnym odczytaniu danych i startowanie faktcznego serwera
         printf("Starting serwer %s [ID: %s, created: %s] ...\n", server_name, server_id, created);
@@ -468,7 +479,7 @@ int main(int argc, char *argv[]) {
                                 continue;
                             }
                             send(sd, "UPLOAD_OK\n", 10, 0);
-                            
+
                             // Odbierz plik
                             int total = 0;
                             while (total < filesize) {
