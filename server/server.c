@@ -131,6 +131,18 @@ int main(int argc, char *argv[]) {
             sqlite3_close(db);
             exit(1);
         }
+        // Tworzenie tabeli z użytkownikami
+        const char *sql_users =
+            "CREATE TABLE IF NOT EXISTS users ("
+            "username TEXT PRIMARY KEY,"         // nazwa użytkownika
+            "password TEXT NOT NULL"             // hasło użytkownika
+            ");";
+        if (sqlite3_exec(db, sql_users, 0, 0, &err) != SQLITE_OK) {
+            fprintf(stderr, "SQL query error: %s\n", err);
+            sqlite3_free(err);
+            sqlite3_close(db);
+            exit(1);
+        }
 
         // Wygenerowanie unikalnego ID serwera
         char server_id[SERVER_ID_LEN];
@@ -359,6 +371,80 @@ int main(int argc, char *argv[]) {
                         client_sockets[i] = 0;
                     } else {
                         // valread > 0 oznacza, że odczytano dane od klienta
+
+                        // Rejestracja użytkownika
+                        if (strncmp(buffer, "REGISTER ", 9) == 0) {
+                            char username[64], password[64];
+                            if (sscanf(buffer + 9, "%63s %63s", username, password) != 2) {
+                                send(sd, "REGISTER_FAIL\n", 14, 0);
+                                continue;
+                            }
+
+                            // Sprawdzenie, czy użytkownik już istnieje
+                            sqlite3_stmt *stmt;
+                            const char *sql = "SELECT username FROM users WHERE username = ?;";
+                            if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+                                send(sd, "REGISTER_FAIL\n", 14, 0);
+                                continue;
+                            }
+                            sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
+
+                            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                                send(sd, "REGISTER_EXISTS\n", 16, 0);
+                                sqlite3_finalize(stmt);
+                                continue;
+                            }
+                            sqlite3_finalize(stmt);
+
+                            // Dodanie nowego użytkownika
+                            sql = "INSERT INTO users (username, password) VALUES (?, ?);";
+                            if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+                                send(sd, "REGISTER_FAIL\n", 14, 0);
+                                continue;
+                            }
+                            sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
+                            sqlite3_bind_text(stmt, 2, password, -1, SQLITE_STATIC);
+
+                            if (sqlite3_step(stmt) == SQLITE_DONE) {
+                                send(sd, "REGISTER_OK\n", 12, 0);
+                            } else {
+                                send(sd, "REGISTER_FAIL\n", 14, 0);
+                            }
+                            sqlite3_finalize(stmt);
+                            continue;
+                        }
+
+                        // Logowanie
+                        if (strncmp(buffer, "LOGIN ", 6) == 0) {
+                            char username[64], password[64];
+                            if (sscanf(buffer + 6, "%63s %63s", username, password) != 2) {
+                                send(sd, "LOGIN_FAIL\n", 11, 0);
+                                continue;
+                            }
+
+                            // Sprawdzenie w bazie danych
+                            sqlite3_stmt *stmt;
+                            const char *sql = "SELECT password FROM users WHERE username = ?;";
+                            if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+                                send(sd, "LOGIN_FAIL\n", 11, 0);
+                                continue;
+                            }
+                            sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
+
+                            int rc = sqlite3_step(stmt);
+                            if (rc == SQLITE_ROW) {
+                                const char *db_pass = (const char*)sqlite3_column_text(stmt, 0);
+                                if (strcmp(db_pass, password) == 0) {
+                                    send(sd, "LOGIN_OK\n", 9, 0);
+                                } else {
+                                    send(sd, "LOGIN_FAIL\n", 11, 0);
+                                }
+                            } else {
+                                send(sd, "LOGIN_FAIL\n", 11, 0);
+                            }
+                            sqlite3_finalize(stmt);
+                            continue;
+                        }
 
                         // Pobranie adresu IP klienta i portu
                         char client_ip[INET_ADDRSTRLEN];

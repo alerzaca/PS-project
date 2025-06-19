@@ -34,6 +34,7 @@ void add_server(const char *id, const char *name, const char *ip, int port) {
         strncpy(servers[server_count].ip, ip, sizeof(servers[server_count].ip));
         servers[server_count].port = port;
         server_count++;
+        printf("id: %s", id); //test
         printf("Server found: %s [ID: %s] on %s:%d\n", name, id, ip, port);
     }
 }
@@ -93,7 +94,7 @@ void search_servers() {
 }
 
 // Tryb połączenia TCP z serwerem
-void connect_to_server(const char *server_id, const char *ip, int port) {
+void connect_to_server(const char *mode, const char *server_id, const char *ip, int port) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         perror("socket error");
@@ -119,8 +120,57 @@ void connect_to_server(const char *server_id, const char *ip, int port) {
 
     printf("Connected to server [%s] (%s:%d)\n", server_id, ip, port);
 
+    char username[64], password[64], buffer[BUFFER_SIZE];
+
+    printf("Username: ");
+    fgets(username, sizeof(username), stdin);
+    username[strcspn(username, "\n")] = '\0';
+
+    printf("Password: ");
+    fgets(password, sizeof(password), stdin);
+    password[strcspn(password, "\n")] = '\0';
+
+    // Wysyłamy komendę: "LOGIN <login> <hasło>" lub "REGISTER <login> <hasło>"
+    snprintf(buffer, sizeof(buffer), "%s %s %s\n", 
+             (strcmp(mode, "login") == 0) ? "LOGIN" : "REGISTER", username, password);
+    send(sock, buffer, strlen(buffer), 0);
+
+    // Oczekiwanie na odpowiedź serwera
+    int n = recv(sock, buffer, sizeof(buffer)-1, 0);
+    if (n <= 0) {
+        printf("Disconnected from server\n");
+        close(sock);
+        return;
+    }
+    buffer[n] = '\0';
+
+    if (strcmp(mode, "login") == 0) {
+        if (strcmp(buffer, "LOGIN_OK\n") == 0) {
+            printf("Logged in successfully.\n");
+        }
+        else {
+            printf("Invalid username or password.\n");
+            close(sock);
+            return;
+        }
+    }
+    else if (strcmp(mode, "register") == 0) {
+        if (strcmp(buffer, "REGISTER_OK\n") == 0) {
+            printf("Registered successfully.\n");
+        }
+        else if (strcmp(buffer, "REGISTER_EXISTS\n") == 0) {
+            printf("This user already exists.\n");
+            close(sock);
+            return;
+        }
+        else {
+            printf("Registration error.\n");
+            close(sock);
+            return;
+        }
+    }
+
     // Prosty chat: wysyłanie i odbieranie wiadomości
-    char buffer[BUFFER_SIZE];
     fd_set readfds;
     while (1) {
         FD_ZERO(&readfds);
@@ -162,17 +212,25 @@ int main(int argc, char *argv[]) {
         search_servers();
     }
     // Tryb połączenia TCP z serwerem (bez multicast)
-    else if (argc == 5 && strcmp(argv[1], "connect") == 0) {
-        const char *id = argv[2];
-        const char *ip = argv[3];
-        int port = atoi(argv[4]);
-        connect_to_server(id, ip, port);
+    else if (argc == 6 && strcmp(argv[1], "connect") == 0) {
+        const char *mode = argv[2];
+        const char *id = argv[3];
+        const char *ip = argv[4];
+        int port = atoi(argv[5]);
+        
+        if (strcmp(mode, "login") == 0 || strcmp(mode, "register") == 0) {
+            connect_to_server(mode, id, ip, port);
+        }
+        else {
+            printf("Invalid parameter. Use './client connect login ...' to login or './client connect register ...' to register new user.\n");
+        }
+
     }
     // Nieprawidłowe wywołanie programu
     else {
         printf("Usage:\n");
         printf("  %s search\n", argv[0]);
-        printf("  %s connect <ID> <IP> <PORT>\n", argv[0]);
+        printf("  %s connect <login|register> <ID> <IP> <PORT>\n", argv[0]);
     }
     return 0;
 }
