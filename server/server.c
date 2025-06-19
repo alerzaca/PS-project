@@ -54,6 +54,7 @@ void* multicast_broadcast(void *arg) {
     struct thread_args *targs = (struct thread_args*)arg;
     char *server_name = targs->server_name;
     char *server_id = targs->server_id;
+    targs->server_id[SERVER_ID_LEN-1] = '\0'; // Dzięki temu nigdy nie dojdzie do sytuacji sklejania id i IP przy generowaniu message
     char *ip = targs->ip;
 
     int sock;
