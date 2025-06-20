@@ -391,8 +391,8 @@ int main(int argc, char *argv[]) {
 
                         // Rejestracja użytkownika
                         if (strncmp(buffer, "REGISTER ", 9) == 0) {
-                            char username[64], password[64];
-                            if (sscanf(buffer + 9, "%63s %63s", username, password) != 2) {
+                            char username[64], hash_str[64];
+                            if (sscanf(buffer + 9, "%63s %63s", username, hash_str) != 2) {
                                 send(sd, "REGISTER_FAIL\n", 14, 0);
                                 continue;
                             }
@@ -420,7 +420,7 @@ int main(int argc, char *argv[]) {
                                 continue;
                             }
                             sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
-                            sqlite3_bind_text(stmt, 2, password, -1, SQLITE_STATIC);
+                            sqlite3_bind_text(stmt, 2, hash_str, -1, SQLITE_STATIC);
 
                             if (sqlite3_step(stmt) == SQLITE_DONE) {
                                 send(sd, "REGISTER_OK\n", 12, 0);
@@ -433,8 +433,8 @@ int main(int argc, char *argv[]) {
 
                         // Logowanie
                         if (strncmp(buffer, "LOGIN ", 6) == 0) {
-                            char username[64], password[64];
-                            if (sscanf(buffer + 6, "%63s %63s", username, password) != 2) {
+                            char username[64], hash_str[64];
+                            if (sscanf(buffer + 6, "%63s %63s", username, hash_str) != 2) {
                                 send(sd, "LOGIN_FAIL\n", 11, 0);
                                 continue;
                             }
@@ -451,7 +451,7 @@ int main(int argc, char *argv[]) {
                             int rc = sqlite3_step(stmt);
                             if (rc == SQLITE_ROW) {
                                 const char *db_pass = (const char*)sqlite3_column_text(stmt, 0);
-                                if (strcmp(db_pass, password) == 0) {
+                                if (strcmp(db_pass, hash_str) == 0) {
                                     send(sd, "LOGIN_OK\n", 9, 0);
                                 } else {
                                     send(sd, "LOGIN_FAIL\n", 11, 0);

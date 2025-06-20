@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <unistd.h>                     // Na potrzeby getpass do bezwyświetleniowego pozyskiwania hasła od użytkownika
+#include <openssl/sha.h>                // Na potrzeby funkcjonalności hashowania hasła użytkownika
 
 #define MULTICAST_GROUP "239.0.0.1"     // Adres grupy multicast, na której serwer będzie się ogłaszał
 #define MULTICAST_PORT 12345            // Port UDP multicast, na którym serwer będzie się ogłaszał
@@ -37,6 +38,11 @@ void add_server(const char *id, const char *name, const char *ip, int port) {
         server_count++;
         printf("Server found: %s [ID: %s] on %s:%d\n", name, id, ip, port);
     }
+}
+
+// Funkcja hashująca hasło użytkownika przed przesłaniem przez sieć
+void hash_password(const char *password, unsigned char *output) {
+    SHA256((unsigned char*)password, strlen(password), output);
 }
 
 // Tryb wyszukiwania serwerów (multicast)
@@ -130,9 +136,18 @@ void connect_to_server(const char *mode, const char *server_id, const char *ip, 
     strncpy(password, password_ptr, sizeof(password) - 1);
     password[sizeof(password) - 1] = '\0';
 
+    // Hashowanie hasła przed wysłaniem przez sieć
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    hash_password(password, hash);
+    char hash_str[SHA256_DIGEST_LENGTH*2 + 1];
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        sprintf(hash_str + i*2, "%02x", hash[i]);
+    }
+    hash_str[SHA256_DIGEST_LENGTH*2] = '\0';
+
     // Wysyłamy komendę: "LOGIN <login> <hasło>" lub "REGISTER <login> <hasło>"
     snprintf(buffer, sizeof(buffer), "%s %s %s\n", 
-             (strcmp(mode, "login") == 0) ? "LOGIN" : "REGISTER", username, password);
+             (strcmp(mode, "login") == 0) ? "LOGIN" : "REGISTER", username, hash_str);
     send(sock, buffer, strlen(buffer), 0);
 
     // Oczekiwanie na odpowiedź serwera
@@ -246,7 +261,7 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        // Pobierz username i password (jak dotychczas)
+        // Pobierz username i password
         char username[64], password[64], buffer[BUFFER_SIZE];
         printf("Username: ");
         fgets(username, sizeof(username), stdin);
@@ -255,8 +270,17 @@ int main(int argc, char *argv[]) {
         strncpy(password, password_ptr, sizeof(password)-1);
         password[sizeof(password)-1] = '\0';
 
+        // Hashowanie hasła przed wysłaniem przez sieć
+        unsigned char hash[SHA256_DIGEST_LENGTH];
+        hash_password(password, hash);
+        char hash_str[SHA256_DIGEST_LENGTH*2 + 1];
+        for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+            sprintf(hash_str + i*2, "%02x", hash[i]);
+        }
+        hash_str[SHA256_DIGEST_LENGTH*2] = '\0';
+
         // Wyślij LOGIN
-        snprintf(buffer, sizeof(buffer), "LOGIN %s %s\n", username, password);
+        snprintf(buffer, sizeof(buffer), "LOGIN %s %s\n", username, hash_str);
         send(sock, buffer, strlen(buffer), 0);
 
         // Odczytaj odpowiedź serwera
