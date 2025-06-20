@@ -4,3 +4,6 @@ server
 
 # Ignore database files
 *.db
+
+# Ignore .vscode folder
+.vscode
