@@ -22,7 +22,6 @@
 #define BUFFER_SIZE 1024            // Rozmiar bufora do odbierania wiadomości
 #define SERVER_ID_LEN 7             // 6 znaków heksadecymalnych + '\0'
 
-
 // Funkcja sprawdzająca, czy plik istnieje
 int file_exists(const char *filename) {
     struct stat buffer;
@@ -285,8 +284,7 @@ int main(int argc, char *argv[]) {
 
         // Ustawianie opcji gniazda
         // SO_REUSEADDR - pozwala na ponowne użycie adresu (przy restartach serwera)
-        // SO_REUSEPORT - pozwala wielu procesom na nasłuchiwanie na tym samym porcie
-        if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
+        if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
             perror("setsockopt error");
             exit(EXIT_FAILURE);
         }
