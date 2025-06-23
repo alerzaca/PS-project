@@ -58,11 +58,18 @@ void generate_id(char *id, size_t size) {
 // Tworzenie bazy danych i tabeli serwera
 int create_database(const char *dbfile, const char *server_name) {
 
+    // Sprawdzenie, czy plik bazy danych istnieje
+    // Jeśli tak, to nie można utworzyć nowej bazy danych o tej same
+    if (file_exists(dbfile)) {
+        fprintf(stderr, "Database '%s' already exists. Run server using './server start %s' or choose other name.\n", dbfile, server_name);
+        return -1;
+    }
+
     // Tworzenie bazy danych SQLite
     sqlite3 *db;
     if (sqlite3_open(dbfile, &db) != SQLITE_OK) {
         fprintf(stderr, "create database error: %s\n", sqlite3_errmsg(db));
-        exit(1);
+        return -1;
     }
 
     // Tworzenie tabeli informacyjnej
@@ -77,7 +84,7 @@ int create_database(const char *dbfile, const char *server_name) {
         fprintf(stderr, "SQL query error: %s\n", err);
         sqlite3_free(err);
         sqlite3_close(db);
-        exit(1);
+        return -1;
     }
 
     // Tworzenie tabeli z użytkownikami
@@ -90,7 +97,7 @@ int create_database(const char *dbfile, const char *server_name) {
         fprintf(stderr, "SQL query error: %s\n", err);
         sqlite3_free(err);
         sqlite3_close(db);
-        exit(1);
+        return -1;
     }
 
     // Wygenerowanie unikalnego ID serwera
@@ -109,7 +116,7 @@ int create_database(const char *dbfile, const char *server_name) {
         fprintf(stderr, "SQL query error: %s\n", err);
         sqlite3_free(err);
         sqlite3_close(db);
-        exit(1);
+        return -1;
     }
 
     printf("Created database for server with name '%s'. New server ID is: %s\n", dbfile, server_id);
@@ -118,23 +125,26 @@ int create_database(const char *dbfile, const char *server_name) {
 }
 
 // Funkcja do pobierania informacji o serwerze z bazy danych (do zmiany)
-int get_server_info(const char *dbfile) {
+int get_server_info(const char *dbfile, char *server_id, char *created) {
 
-    // To powinna być tablica lub struktura, która przechowuje informacje o serwerze
-    int result = 0;
+    // Sprawdzenie, czy plik bazy danych istnieje
+    // Jeśli nie, to informacja o tym, że serwer nie istnieje i należy go utworzyć
+    if (!file_exists(dbfile)) {
+        fprintf(stderr, "Database for server (%s) does not exist. Use './server create <name>'\n", dbfile);
+        return -1;
+    }
 
-    // Przygotowanie nazwy pliku bazy danych
+    // Przygotowanie pliku bazy danych
     sqlite3 *db;
     if (sqlite3_open(dbfile, &db) != SQLITE_OK) {
         fprintf(stderr, "open database error: %s\n", sqlite3_errmsg(db));
-        exit(1);
+        return -1;
     }
 
-    // Pobieranie informacji o serwerze z bazy danych
-    char server_id[SERVER_ID_LEN] = "";
-    char created[32] = "";
     const char *sql = "SELECT id, created FROM server_info LIMIT 1;";
     sqlite3_stmt *stmt;
+    int result = 0;
+    
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             strncpy(server_id, (const char*)sqlite3_column_text(stmt, 0), SERVER_ID_LEN-1);
@@ -151,6 +161,8 @@ int get_server_info(const char *dbfile) {
         sqlite3_close(db);
         return -1;
     }
+
+    sqlite3_close(db);
     return result;
 }
 
@@ -169,7 +181,7 @@ int register_user(sqlite3 *db, const char *username, const char *hash_str, int s
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         send(sd, "REGISTER_EXISTS\n", 16, 0);
         sqlite3_finalize(stmt);
-        return -1;
+        return 1;
     }
     sqlite3_finalize(stmt);
 
@@ -185,11 +197,11 @@ int register_user(sqlite3 *db, const char *username, const char *hash_str, int s
     int rc = sqlite3_step(stmt);
     if (rc == SQLITE_DONE) {
         send(sd, "REGISTER_OK\n", 12, 0);
+        return 0;
     } else {
         send(sd, "REGISTER_FAIL\n", 14, 0);
+        return -1;
     }
-    sqlite3_finalize(stmt);
-    return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
 // Logowanie użytkownika
@@ -209,14 +221,14 @@ int login_user(sqlite3 *db, const char *username, const char *hash_str, int sd) 
         const char *db_pass = (const char*)sqlite3_column_text(stmt, 0);
         if (strcmp(db_pass, hash_str) == 0) {
             send(sd, "LOGIN_OK\n", 9, 0);
-        } else {
-            send(sd, "LOGIN_FAIL\n", 11, 0);
+            sqlite3_finalize(stmt);
+            return 0;
         }
-    } else {
-        send(sd, "LOGIN_FAIL\n", 11, 0);
     }
+
+    send(sd, "LOGIN_FAIL\n", 11, 0);
     sqlite3_finalize(stmt);
-    return (rc == SQLITE_DONE) ? 0 : -1;
+    return -1;
 }
 
 // Funkcja do obsługi przesyłania plików
@@ -287,13 +299,20 @@ void handle_client(
     int i,
     int sd,
     struct sockaddr_in *client_addr,
-    sqlite3 *db,
+    const char *dbfile,
     const char *server_name,
     int *client_sockets,
     struct sockaddr_in *client_addresses,
     char *buffer,
     int valread
 ) {
+    // Przygotowanie pliku bazy danych
+    sqlite3 *db;
+    if (sqlite3_open(dbfile, &db) != SQLITE_OK) {
+        fprintf(stderr, "open database error: %s\n", sqlite3_errmsg(db));
+        return;
+    }
+    
     // Obsługa rozłączenia klienta
     if (valread <= 0) {
         // valread <= 0 oznacza, że klient rozłączył się lub wystąpił błąd
@@ -308,6 +327,7 @@ void handle_client(
         // Zamknięcie gniazda klienta i usunięcie go z listy aktywnych gniazd
         close(sd);
         client_sockets[i] = 0;
+        sqlite3_close(db);
         return;
     }
 
@@ -317,18 +337,14 @@ void handle_client(
         char username[64], hash_str[64];
         if (sscanf(buffer + 9, "%63s %63s", username, hash_str) != 2) {
             send(sd, "REGISTER_FAIL\n", 14, 0);
+            sqlite3_close(db);
             return;
         }
 
         // Rejestracja użytkownika w bazie danych
-        int reg_result = register_user(db, username, hash_str, sd);       
-        if (reg_result == 0) {
-            send(sd, "REGISTER_OK\n", 12, 0);
-        } else if (reg_result == 1) {
-            send(sd, "REGISTER_EXISTS\n", 16, 0);
-        } else {
-            send(sd, "REGISTER_FAIL\n", 14, 0);
-        }
+        register_user(db, username, hash_str, sd);
+
+        sqlite3_close(db);
         return;
     }
 
@@ -338,28 +354,28 @@ void handle_client(
         char username[64], hash_str[64];
         if (sscanf(buffer + 6, "%63s %63s", username, hash_str) != 2) {
             send(sd, "LOGIN_FAIL\n", 11, 0);
+            sqlite3_close(db);
             return;
         }
 
         // Logowanie użytkownika w bazie danych
-        int login_result = login_user(db, username, hash_str, sd);
-        if (login_result == 0) {
-            send(sd, "LOGIN_OK\n", 9, 0);
-        } else {
-            send(sd, "LOGIN_FAIL\n", 11, 0);
-        }
+        login_user(db, username, hash_str, sd);
+
+        sqlite3_close(db);
         return;
     }
 
     // Obsługa polecenia UPLOAD
     if (strncmp(buffer, "UPLOAD ", 7) == 0) {
         handle_upload(sd, server_name, buffer);
+        sqlite3_close(db);
         return;
     }
 
     // Obsługa polecenia DOWNLOAD
     if (strncmp(buffer, "DOWNLOAD ", 9) == 0) {
         handle_download(sd, server_name, buffer);
+        sqlite3_close(db);
         return;
     }
 
@@ -385,10 +401,12 @@ void handle_client(
             send(dest_sd, message, strlen(message), 0);
         }
     }
+
+    sqlite3_close(db);
 }
 
 // Główna pętla serwera
-void server_main_loop(int server_fd, sqlite3 *db, const char *server_name) {
+void server_main_loop(int server_fd, const char *dbfile, const char *server_name) {
     
     // Tablica do przechowywania aktywnych gniazd klientów
     int client_sockets[MAX_CLIENTS] = {0};
@@ -463,7 +481,7 @@ void server_main_loop(int server_fd, sqlite3 *db, const char *server_name) {
             // FD_ISSET sprawdza, czy gniazdo klienta jest gotowe do odczytu        
             if (sd > 0 && FD_ISSET(sd, &readfds)) {
                 int valread = read(sd, buffer, sizeof(buffer)-1);
-                handle_client(i, sd, &client_addresses[i], db, server_name, client_sockets, client_addresses, buffer, valread);
+                handle_client(i, sd, &client_addresses[i], dbfile, server_name, client_sockets, client_addresses, buffer, valread);
             }
         }
     }
@@ -485,7 +503,6 @@ void* multicast_broadcast(void *arg) {
     int tcp_port = targs->tcp_port;
     targs->server_id[SERVER_ID_LEN-1] = '\0'; // Dzięki temu nigdy nie dojdzie do sytuacji sklejania id i IP przy generowaniu message
     char *ip = targs->ip;
-
 
     int sock;
     struct sockaddr_in addr;
@@ -524,6 +541,48 @@ void* multicast_broadcast(void *arg) {
     pthread_exit(NULL);
 }
 
+// Inicjalizacja gniazda TCP i uruchomienie serwera
+void run_tcp_server(const char *dbfile, const char *server_name, char *server_id, int tcp_port) {
+    int server_fd;
+    struct sockaddr_in server_addr;
+    int opt = 1;
+
+    // Tworzenie gniazda
+    // AF_INET - IPv4, SOCK_STREAM - TCP, 0 - domyślny protokół
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("TCP socket error");
+        exit(EXIT_FAILURE);
+    }
+
+    // Ustawianie opcji gniazda
+    // SO_REUSEADDR - pozwala na ponowne użycie adresu (przy restartach serwera)
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+        perror("setsockopt error");
+        exit(EXIT_FAILURE);
+    }
+
+    // Konfiguracja adresu serwera
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(tcp_port);
+
+    // Bind - przypisanie gniazda do adresu i portu
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("bind error");
+        exit(EXIT_FAILURE);
+    }
+
+    // Wyświetlenie kontrolnej informacji o otwarciu serwera
+    printf("Server opened as %s [ID: %s] on port %d \n", server_name, server_id, tcp_port);
+
+    // Uruchomienie głównej pętli serwera
+    server_main_loop(server_fd, dbfile, server_name);
+
+    // Sprzątanie końcowe: zamknięcie gniazda
+    close(server_fd);
+}
+
 int main(int argc, char *argv[]) {
     if (argc == 3 && strcmp(argv[1], "create") == 0) {
         char server_name[128] = "";
@@ -531,17 +590,6 @@ int main(int argc, char *argv[]) {
 
         char dbfile[256];
         snprintf(dbfile, sizeof(dbfile), "%s.db", server_name);
-
-        // Sprawdzenie, czy plik bazy danych istnieje
-        // Jeśli tak, to nie można utworzyć nowej bazy danych o tej same
-        if (file_exists(dbfile)) {
-            char dbfile_wout_db[256];
-            int len = strlen(dbfile);
-            strncpy(dbfile_wout_db, dbfile, len - 3);
-            dbfile_wout_db[len - 3] = '\0';
-            fprintf(stderr, "Database '%s' already exists. Run server using './server start %s' or choose other name for your new server instance.\n", dbfile, dbfile_wout_db);
-            exit(1);
-        }
 
         // Utworzenie bazy danych i tabeli serwera
         create_database(dbfile, server_name);
@@ -565,43 +613,11 @@ int main(int argc, char *argv[]) {
         char dbfile[256];
         snprintf(dbfile, sizeof(dbfile), "%s.db", server_name);
 
-        // Sprawdzenie, czy plik bazy danych istnieje
-        // Jeśli nie, to informacja o tym, że serwer nie istnieje i należy go utworzyć
-        if (!file_exists(dbfile)) {
-            char dbfile_wout_db[256];
-            int len = strlen(dbfile);
-            strncpy(dbfile_wout_db, dbfile, len - 3);
-            dbfile_wout_db[len - 3] = '\0';
-            fprintf(stderr, "Database for server (%s) does not exist. To create a new server with that name use './server create %s'\n", dbfile, dbfile_wout_db);
-            exit(1);
-        }
-
-        // Przygotowanie nazwy pliku bazy danych
-        sqlite3 *db;
-        if (sqlite3_open(dbfile, &db) != SQLITE_OK) {
-            fprintf(stderr, "open database error: %s\n", sqlite3_errmsg(db));
-            exit(1);
-        }
-
         // Pobieranie informacji o serwerze z bazy danych
         char server_id[SERVER_ID_LEN] = "";
         char created[32] = "";
-        const char *sql = "SELECT id, created FROM server_info LIMIT 1;";
-        sqlite3_stmt *stmt;
-        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
-            if (sqlite3_step(stmt) == SQLITE_ROW) {
-                strncpy(server_id, (const char*)sqlite3_column_text(stmt, 0), SERVER_ID_LEN-1);
-                strncpy(created, (const char*)sqlite3_column_text(stmt, 1), sizeof(created)-1);
-            } else {
-                fprintf(stderr, "database error: not enough records\n");
-                sqlite3_finalize(stmt);
-                sqlite3_close(db);
-                exit(1);
-            }
-            sqlite3_finalize(stmt);
-        } else {
-            fprintf(stderr, "SQL database read error\n");
-            sqlite3_close(db);
+        if (get_server_info(dbfile, server_id, created) != 0) {
+            fprintf(stderr, "get info from fatabase error\n");
             exit(1);
         }
 
@@ -641,46 +657,13 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        // Inicjalizacja gniazda TCP
-        int server_fd;
-        struct sockaddr_in server_addr;
-        int opt = 1;
+        // Uruchomienie serwera TCP
+        run_tcp_server(dbfile, server_name, server_id, tcp_port);
 
-        // Tworzenie gniazda
-        // AF_INET - IPv4, SOCK_STREAM - TCP, 0 - domyślny protokół
-        if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-            perror("TCP socket error");
-            exit(EXIT_FAILURE);
-        }
-
-        // Ustawianie opcji gniazda
-        // SO_REUSEADDR - pozwala na ponowne użycie adresu (przy restartach serwera)
-        if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-            perror("setsockopt error");
-            exit(EXIT_FAILURE);
-        }
-
-        // Konfiguracja adresu serwera
-        memset(&server_addr, 0, sizeof(server_addr));
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_addr.s_addr = INADDR_ANY;
-        server_addr.sin_port = htons(tcp_port);
-
-        // Bind - przypisanie gniazda do adresu i portu
-        if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-            perror("bind error");
-            exit(EXIT_FAILURE);
-        }
-
-        printf("Server opened as %s [ID: %s] on port %d \n", server_name, server_id, tcp_port);
-
-        // Główna pętla serwera
-        server_main_loop(server_fd, db, server_name);
-
-        // Sprzątanie końcowe: zamknięcie gniazda i zakończenie wątku multicast
+        // Po zakończeniu działania serwera, zamknięcie wątku multicast i bazy danych
         pthread_cancel(multicast_thread);
         pthread_join(multicast_thread, NULL);
-        close(server_fd);
+        
         free(targs);
         return 0;
     }
