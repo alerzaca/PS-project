@@ -7,3 +7,13 @@ server
 
 # Ignore .vscode folder
 .vscode
+
+# Don't ignore the src and include directories
+!server/src/
+!server/include/
+!client/src/
+!client/include/
+
+# Ignore shared and database directories
+server/shared/
+server/database/

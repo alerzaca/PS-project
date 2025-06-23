@@ -2,16 +2,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <ifaddrs.h>
-#include <pthread.h>
+#include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <pthread.h>
+#include <ifaddrs.h>
 #include <sqlite3.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
-#include <string.h>
+#include <sys/select.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define MULTICAST_GROUP "239.0.0.1" // Adres grupy multicast, na której serwer będzie się ogłaszał
 #define MULTICAST_PORT 12345        // Port UDP multicast, na którym serwer będzie się ogłaszał
@@ -59,6 +60,7 @@ struct thread_args {
     char server_name[128];
     char server_id[SERVER_ID_LEN];
     char ip[INET_ADDRSTRLEN];
+    int tcp_port;
 };
 
 // Wątek rozgłaszania multicast
@@ -66,8 +68,10 @@ void* multicast_broadcast(void *arg) {
     struct thread_args *targs = (struct thread_args*)arg;
     char *server_name = targs->server_name;
     char *server_id = targs->server_id;
+    int tcp_port = targs->tcp_port;
     targs->server_id[SERVER_ID_LEN-1] = '\0'; // Dzięki temu nigdy nie dojdzie do sytuacji sklejania id i IP przy generowaniu message
     char *ip = targs->ip;
+
 
     int sock;
     struct sockaddr_in addr;
@@ -89,7 +93,7 @@ void* multicast_broadcast(void *arg) {
     while(1) {
         // Przygotowanie wiadomości do rozgłoszenia
         // Format: <ID>:<Name>:<IP>:<Port>
-        snprintf(message, sizeof(message), "%s:%s:%s:%d", server_id, server_name, ip, TCP_PORT);
+        snprintf(message, sizeof(message), "%s:%s:%s:%d", server_id, server_name, ip, tcp_port);
 
         if (sendto(sock, message, strlen(message), 0, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
             perror("sendto error");
@@ -98,7 +102,7 @@ void* multicast_broadcast(void *arg) {
         }
         
         // Można odkomentować poniższą linię, aby zobaczyć wysyłane wiadomości, ale szybko może to zapełnić konsolę
-        //printf("[Multicast message]: '%s'\n", message);
+        printf("[Multicast message]: '%s'\n", message);
         sleep(5);
     }
 
@@ -181,12 +185,18 @@ int main(int argc, char *argv[]) {
         exit(0);
     }
 
-    else if (argc == 4 && strcmp(argv[1], "start") == 0) {
+    else if (argc == 5 && strcmp(argv[1], "start") == 0) {
         char server_name[128] = "";
         strncpy(server_name, argv[2], sizeof(server_name)-1);
 
         char *ifname = argv[3];
         char ip[INET_ADDRSTRLEN] = "0.0.0.0";
+        
+        int tcp_port = atoi(argv[4]);
+        if (tcp_port <= 0 || tcp_port > 65535) {
+            fprintf(stderr, "Invalid TCP port number: %d. It should be between 1 and 65535.\n", tcp_port);
+            exit(1);
+        }
 
         char dbfile[256];
         snprintf(dbfile, sizeof(dbfile), "%s.db", server_name);
@@ -256,6 +266,7 @@ int main(int argc, char *argv[]) {
         strncpy(targs->server_name, server_name, sizeof(targs->server_name)-1);
         strncpy(targs->server_id, server_id, sizeof(targs->server_id)-1);
         strncpy(targs->ip, ip, INET_ADDRSTRLEN);
+        targs->tcp_port = tcp_port;
 
         // Uruchomienie nowego wątku multicast
         pthread_t multicast_thread;
@@ -293,7 +304,7 @@ int main(int argc, char *argv[]) {
         memset(&server_addr, 0, sizeof(server_addr));
         server_addr.sin_family = AF_INET;
         server_addr.sin_addr.s_addr = INADDR_ANY;
-        server_addr.sin_port = htons(TCP_PORT);
+        server_addr.sin_port = htons(tcp_port);
 
         // Bind - przypisanie gniazda do adresu i portu
         if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
@@ -301,7 +312,7 @@ int main(int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         }
 
-        printf("Server opened as %s [ID: %s] on port %d \n", server_name, server_id, TCP_PORT);
+        printf("Server opened as %s [ID: %s] on port %d \n", server_name, server_id, tcp_port);
 
         // Listen
         if (listen(server_fd, BACKLOG) < 0) {
@@ -559,7 +570,7 @@ int main(int argc, char *argv[]) {
     else {
         printf("Usage:\n");
         printf("  %s create <name>\n", argv[0]);
-        printf("  %s start <name> <interface>\n", argv[0]);
+        printf("  %s start <name> <interface> <port>\n", argv[0]);
         exit(EXIT_FAILURE);
     } 
 }
