@@ -221,28 +221,28 @@ void connect_to_server(const char *mode, const char *server_id, const char *ip, 
     close(sock);
 }
 
-int main(int argc, char *argv[]) {
-    // Tryb wyszukiwania serwerów przez multicast
-    if (argc == 2 && strcmp(argv[1], "search") == 0) {
-        search_servers();
-    }
+// nowa funkcja !
+void handle_connect_mode(int argc, char *argv[]) {
     // Tryb połączenia TCP z serwerem (bez multicast)
-    else if (argc == 6 && strcmp(argv[1], "connect") == 0) {
+    if (argc == 6 && strcmp(argv[1], "connect") == 0) {
         const char *mode = argv[2];
         const char *id = argv[3];
         const char *ip = argv[4];
         int port = atoi(argv[5]);
-        
+
         if (strcmp(mode, "login") == 0 || strcmp(mode, "register") == 0) {
             connect_to_server(mode, id, ip, port);
         }
         else {
             printf("Invalid parameter. Use './client connect login ...' to login or './client connect register ...' to register new user.\n");
         }
-
     }
+}
+
+// nowa funkcja !
+int handle_file_transfer(int argc, char *argv[]) {
     // Wysłanie pliku na serwer / Pobranie pliku z serwera
-    else if ((argc == 6) && (strcmp(argv[1], "upload") == 0 || strcmp(argv[1], "download") == 0)) {
+    if ((argc == 6) && (strcmp(argv[1], "upload") == 0 || strcmp(argv[1], "download") == 0)) {
         const char *mode = argv[1];
         const char *server_id = argv[2];
         const char *ip = argv[3];
@@ -351,13 +351,27 @@ int main(int argc, char *argv[]) {
         close(sock);
         return 0;
     }
+}
+
+// nowa funkcja !
+void print_usage(char *argv[]) {
     // Nieprawidłowe wywołanie programu
+    printf("Usage:\n");
+    printf("  %s search\n", argv[0]);
+    printf("  %s connect <login|register> <ID> <IP> <PORT>\n", argv[0]);
+    printf("  %s upload <ID> <IP> <PORT> <filename to upload>\n", argv[0]);
+    printf("  %s download <ID> <IP> <PORT> <filename to download>\n", argv[0]);
+}
+
+int main(int argc, char *argv[]) {
+    // Tryb wyszukiwania serwerów przez multicast
+    if (argc == 2 && strcmp(argv[1], "search") == 0) {
+        search_servers();
+    }
     else {
-        printf("Usage:\n");
-        printf("  %s search\n", argv[0]);
-        printf("  %s connect <login|register> <ID> <IP> <PORT>\n", argv[0]);
-        printf("  %s connect upload <ID> <IP> <PORT> <filename to upload>\n", argv[0]);
-        printf("  %s connect download <ID> <IP> <PORT> <filename to download>\n", argv[0]);
+        handle_connect_mode(argc, argv);
+        handle_file_transfer(argc, argv);
+        print_usage(argv);
     }
     return 0;
 }
