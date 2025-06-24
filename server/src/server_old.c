@@ -23,6 +23,8 @@
 #define BUFFER_SIZE 1024            // Rozmiar bufora do odbierania wiadomości
 #define SERVER_ID_LEN 7             // 6 znaków heksadecymalnych + '\0'
 
+// UTILS
+
 // Funkcja sprawdzająca, czy plik istnieje
 int file_exists(const char *filename) {
     struct stat buffer;
@@ -54,6 +56,8 @@ void generate_id(char *id, size_t size) {
     unsigned int hash = (unsigned int)time(NULL) ^ (unsigned int)getpid();
     snprintf(id, size, "%06X", hash % 0xFFFFFF); // np. "A1B2C3"
 }
+
+// DATABASE
 
 // Tworzenie bazy danych i tabeli serwera
 int create_database(const char *dbfile, const char *server_name) {
@@ -230,6 +234,8 @@ int login_user(sqlite3 *db, const char *username, const char *hash_str, int sd) 
     sqlite3_finalize(stmt);
     return -1;
 }
+
+// NETWORK
 
 // Funkcja do obsługi przesyłania plików
 int handle_upload(int sd, const char *server_name, char *buffer) {
@@ -582,6 +588,8 @@ void run_tcp_server(const char *dbfile, const char *server_name, char *server_id
     // Sprzątanie końcowe: zamknięcie gniazda
     close(server_fd);
 }
+
+// MAIN
 
 int main(int argc, char *argv[]) {
     if (argc == 3 && strcmp(argv[1], "create") == 0) {
