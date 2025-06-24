@@ -26,6 +26,8 @@ struct server_info {
 struct server_info servers[MAX_SERVERS];
 int server_count = 0;
 
+// CREDENTIALS 
+
 // Funkcja do pobrania nazwy użytkownika i hasła
 void get_user_credentials(char *username, size_t ulen, char *password, size_t plen) {
     printf("Username: ");
@@ -34,31 +36,6 @@ void get_user_credentials(char *username, size_t ulen, char *password, size_t pl
     char *password_ptr = getpass("Password: ");
     strncpy(password, password_ptr, plen - 1);
     password[plen - 1] = '\0';
-}
-
-// Funkcja do wysyłania komendy logowania lub rejestracji do serwera
-int send_login_or_register(int sock, const char *mode, const char *username, const char *hash_str, char *buffer) {
-    snprintf(buffer, BUFFER_SIZE, "%s %s %s\n", mode, username, hash_str);
-    send(sock, buffer, strlen(buffer), 0);
-    int n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
-    if (n <= 0) return -1;
-    buffer[n] = '\0';
-    return 0;
-}
-
-// Dodanie serwera do listy unikalnych serwerów
-void add_server(const char *id, const char *name, const char *ip, int port) {
-    for (int i = 0; i < server_count; ++i) {
-        if (strcmp(servers[i].id, id) == 0) return; // już jest na liście
-    }
-    if (server_count < MAX_SERVERS) {
-        strncpy(servers[server_count].id, id, sizeof(servers[server_count].id));
-        strncpy(servers[server_count].name, name, sizeof(servers[server_count].name));
-        strncpy(servers[server_count].ip, ip, sizeof(servers[server_count].ip));
-        servers[server_count].port = port;
-        server_count++;
-        printf("Server found: %s [ID: %s] on %s:%d\n", name, id, ip, port);
-    }
 }
 
 // Funkcja hashująca hasło użytkownika przed przesłaniem przez sieć
@@ -73,6 +50,23 @@ void hash_password_hex(const char *password, char *hash_str) {
     for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
         sprintf(hash_str + i * 2, "%02x", hash[i]);
     hash_str[SHA256_DIGEST_LENGTH * 2] = '\0';
+}
+
+// NETWORK
+
+// Dodanie serwera do listy unikalnych serwerów
+void add_server(const char *id, const char *name, const char *ip, int port) {
+    for (int i = 0; i < server_count; ++i) {
+        if (strcmp(servers[i].id, id) == 0) return; // już jest na liście
+    }
+    if (server_count < MAX_SERVERS) {
+        strncpy(servers[server_count].id, id, sizeof(servers[server_count].id));
+        strncpy(servers[server_count].name, name, sizeof(servers[server_count].name));
+        strncpy(servers[server_count].ip, ip, sizeof(servers[server_count].ip));
+        servers[server_count].port = port;
+        server_count++;
+        printf("Server found: %s [ID: %s] on %s:%d\n", name, id, ip, port);
+    }
 }
 
 // Wyszukiwanie serwerów (multicast)
@@ -127,64 +121,6 @@ void search_servers() {
         }
     }
     close(sock);
-}
-
-// Odbiieranie powitania i historii czatu od serwera
-int receive_welcome_and_history(int sock) {
-    uint32_t len_net;
-    int received = 0;
-    while (received < sizeof(len_net)) {
-        int n = recv(sock, ((char*)&len_net) + received, sizeof(len_net) - received, 0);
-        if (n <= 0) return -1;
-        received += n;
-    }
-    uint32_t msg_len = ntohl(len_net);
-    char *welcome_buf = malloc(msg_len + 1);
-    if (!welcome_buf) return -1;
-    received = 0;
-    while (received < msg_len) {
-        int n = recv(sock, welcome_buf + received, msg_len - received, 0);
-        if (n <= 0) { free(welcome_buf); return -1; }
-        received += n;
-    }
-    welcome_buf[msg_len] = '\0';
-    printf("%s", welcome_buf);
-    free(welcome_buf);
-    return 0;
-}
-
-// Główna pętla czatu - wysyłanie i odbieranie wiadomości
-void chat_loop(int sock, const char *username) {
-    char buffer[BUFFER_SIZE];
-    int show_prompt = 1;
-    fd_set readfds;
-    while (1) {
-        FD_ZERO(&readfds);
-        FD_SET(STDIN_FILENO, &readfds);
-        FD_SET(sock, &readfds);
-        int maxfd = sock > STDIN_FILENO ? sock : STDIN_FILENO;
-        if (show_prompt) {
-            printf("[%s]: ", username);
-            fflush(stdout);
-            show_prompt = 0;
-        }
-        select(maxfd+1, &readfds, NULL, NULL, NULL);
-        if (FD_ISSET(STDIN_FILENO, &readfds)) {
-            if (fgets(buffer, sizeof(buffer), stdin) == NULL) break;
-            send(sock, buffer, strlen(buffer), 0);
-            show_prompt = 1;
-        }
-        if (FD_ISSET(sock, &readfds)) {
-            int n = recv(sock, buffer, sizeof(buffer)-1, 0);
-            if (n <= 0) {
-                printf("Disconnected from server\n");
-                break;
-            }
-            buffer[n] = '\0';
-            printf("\r%s", buffer);
-            show_prompt = 1;
-        }
-    }
 }
 
 // Tryb połączenia TCP z serwerem
@@ -255,6 +191,75 @@ void connect_to_server(const char *mode, const char *server_id, const char *ip, 
     close(sock);
 }
 
+// Odbiieranie powitania i historii czatu od serwera
+int receive_welcome_and_history(int sock) {
+    uint32_t len_net;
+    int received = 0;
+    while (received < sizeof(len_net)) {
+        int n = recv(sock, ((char*)&len_net) + received, sizeof(len_net) - received, 0);
+        if (n <= 0) return -1;
+        received += n;
+    }
+    uint32_t msg_len = ntohl(len_net);
+    char *welcome_buf = malloc(msg_len + 1);
+    if (!welcome_buf) return -1;
+    received = 0;
+    while (received < msg_len) {
+        int n = recv(sock, welcome_buf + received, msg_len - received, 0);
+        if (n <= 0) { free(welcome_buf); return -1; }
+        received += n;
+    }
+    welcome_buf[msg_len] = '\0';
+    printf("%s", welcome_buf);
+    free(welcome_buf);
+    return 0;
+}
+
+// Główna pętla czatu - wysyłanie i odbieranie wiadomości
+void chat_loop(int sock, const char *username) {
+    char buffer[BUFFER_SIZE];
+    int show_prompt = 1;
+    fd_set readfds;
+    while (1) {
+        FD_ZERO(&readfds);
+        FD_SET(STDIN_FILENO, &readfds);
+        FD_SET(sock, &readfds);
+        int maxfd = sock > STDIN_FILENO ? sock : STDIN_FILENO;
+        if (show_prompt) {
+            printf("[%s]: ", username);
+            fflush(stdout);
+            show_prompt = 0;
+        }
+        select(maxfd+1, &readfds, NULL, NULL, NULL);
+        if (FD_ISSET(STDIN_FILENO, &readfds)) {
+            if (fgets(buffer, sizeof(buffer), stdin) == NULL) break;
+            send(sock, buffer, strlen(buffer), 0);
+            show_prompt = 1;
+        }
+        if (FD_ISSET(sock, &readfds)) {
+            int n = recv(sock, buffer, sizeof(buffer)-1, 0);
+            if (n <= 0) {
+                printf("Disconnected from server\n");
+                break;
+            }
+            buffer[n] = '\0';
+            printf("\r%s", buffer);
+            show_prompt = 1;
+        }
+    }
+}
+
+
+// Funkcja do wysyłania komendy logowania lub rejestracji do serwera
+int send_login_or_register(int sock, const char *mode, const char *username, const char *hash_str, char *buffer) {
+    snprintf(buffer, BUFFER_SIZE, "%s %s %s\n", mode, username, hash_str);
+    send(sock, buffer, strlen(buffer), 0);
+    int n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
+    if (n <= 0) return -1;
+    buffer[n] = '\0';
+    return 0;
+}
+
 // nowa funkcja !
 void handle_connect_mode(int argc, char *argv[]) {
     // Tryb połączenia TCP z serwerem (bez multicast)
@@ -272,6 +277,8 @@ void handle_connect_mode(int argc, char *argv[]) {
         }
     }
 }
+
+// FILETRANSFER
 
 // Logika logowania do serwera plików
 int login_to_file_server(int sock, char *username, char *password, char *buffer) {
@@ -343,6 +350,8 @@ int download_file(int sock, const char *filename, char *buffer) {
     printf("File downloaded successfully\n");
     return 0;
 }
+
+// MAIN
 
 // Obsługa przesyłania plików (upload/download)
 int handle_file_transfer(int argc, char *argv[]) {
