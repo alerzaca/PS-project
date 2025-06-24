@@ -53,6 +53,21 @@ int create_database(const char *dbfile, const char *server_name) {
         return -1;
     }
 
+    // Tworzrenie tabeli z historią czatu
+    const char *sql_chat_history =
+        "CREATE TABLE IF NOT EXISTS chat_history ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "username TEXT,"
+        "message TEXT NOT NULL,"
+        "timestamp TEXT NOT NULL"
+        ");";
+    if (sqlite3_exec(db, sql_chat_history, 0, 0, &err) != SQLITE_OK) {
+        fprintf(stderr, "SQL query error: %s\n", err);
+        sqlite3_free(err);
+        sqlite3_close(db);
+        return -1;
+    }
+
     // Wygenerowanie unikalnego ID serwera
     char server_id[SERVER_ID_LEN];
     generate_id(server_id, sizeof(server_id));
@@ -183,3 +198,50 @@ int login_user(sqlite3 *db, const char *username, const char *hash_str, int sd) 
     sqlite3_finalize(stmt);
     return -1;
 }
+
+// Funkcja do zapisywania wiadomości czatu w bazie danych
+int save_message(sqlite3 *db, const char *username, const char *message) {
+    char timestamp[32];
+    get_current_datetime(timestamp, sizeof(timestamp)); // zakładam, że masz już taką funkcję
+
+    sqlite3_stmt *stmt;
+    const char *sql = "INSERT INTO chat_history (username, message, timestamp) VALUES (?, ?, ?);";
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+        return -1;
+    }
+    sqlite3_bind_text(stmt, 1, username ? username : "", -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, message, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, timestamp, -1, SQLITE_STATIC);
+
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+// Funkcja do pobierania ostatnich wiadomości czatu z bazy danych
+int get_last_messages(sqlite3 *db, char *output, size_t output_size, int limit) {
+   
+    // Pobierz do 10 ostatnich wiadomości, od najstarszej do najnowszej
+    const char *sql =
+        "SELECT username, message FROM ("
+        "SELECT username, message, id FROM chat_history ORDER BY id DESC LIMIT ?"
+        ") ORDER BY id ASC;";
+
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+        return -1;
+    }
+    sqlite3_bind_int(stmt, 1, limit);
+
+    size_t offset = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *username = (const char*)sqlite3_column_text(stmt, 0);
+        const char *message = (const char*)sqlite3_column_text(stmt, 1);
+        int n = snprintf(output + offset, output_size - offset, "[%s]: %s", username, message);
+        if (n < 0 || (size_t)n >= output_size - offset) break;
+        offset += n;
+    }
+    sqlite3_finalize(stmt);
+    return 0;
+}
+

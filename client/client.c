@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -25,7 +26,7 @@ struct server_info {
 struct server_info servers[MAX_SERVERS];
 int server_count = 0;
 
-// Dodaje serwer do listy jeśli nie ma już takiego ID
+// Dodanie serwera do listy unikalnych serwerów
 void add_server(const char *id, const char *name, const char *ip, int port) {
     for (int i = 0; i < server_count; ++i) {
         if (strcmp(servers[i].id, id) == 0) return; // już jest na liście
@@ -45,7 +46,7 @@ void hash_password(const char *password, unsigned char *output) {
     SHA256((unsigned char*)password, strlen(password), output);
 }
 
-// Tryb wyszukiwania serwerów (multicast)
+// Wyszukiwanie serwerów (multicast)
 void search_servers() {
     int sock;
     struct sockaddr_in addr;
@@ -126,11 +127,13 @@ void connect_to_server(const char *mode, const char *server_id, const char *ip, 
 
     printf("Connected to server [%s] (%s:%d)\n", server_id, ip, port);
 
+    // Pobranie nazwy użytkownika i hasła
     char username[64], password[64], buffer[BUFFER_SIZE];
 
     printf("Username: ");
     fgets(username, sizeof(username), stdin);
     username[strcspn(username, "\n")] = '\0';
+    
     // Hasło wpisywane przez użytkownika nie wyświetla się w konsoli
     char *password_ptr = getpass("Password: ");
     strncpy(password, password_ptr, sizeof(password) - 1);
@@ -184,8 +187,36 @@ void connect_to_server(const char *mode, const char *server_id, const char *ip, 
             return;
         }
     }
+    printf("\n");
+    
+    // Po zalogowaniu/rejestracji odbierz powitanie i historię czatu
+    // Najpierw odbierz pole długości (uint32_t, sieciowo)
+    uint32_t len_net;
+    int received = 0;
+    while (received < sizeof(len_net)) {
+        int n = recv(sock, ((char*)&len_net) + received, sizeof(len_net) - received, 0);
+        if (n <= 0) { printf("Disconnected from server\n"); close(sock); return; }
+        received += n;
+    }
+    uint32_t msg_len = ntohl(len_net);
 
-    // Prosty chat: wysyłanie i odbieranie wiadomości
+    // Teraz odbierz dokładnie msg_len bajtów
+    char *welcome_buf = malloc(msg_len + 1);
+    if (!welcome_buf) { printf("Memory error\n"); close(sock); return; }
+    received = 0;
+    while (received < msg_len) {
+        int n = recv(sock, welcome_buf + received, msg_len - received, 0);
+        if (n <= 0) { printf("Disconnected from server\n"); free(welcome_buf); close(sock); return; }
+        received += n;
+    }
+    welcome_buf[msg_len] = '\0';
+    printf("%s", welcome_buf);
+    free(welcome_buf);
+
+    // Zmienna pomocnicza - czy potrzebujemy wyświetlić prompt
+    int show_prompt = 1; 
+
+    // Główny chat - wysyłanie i odbieranie wiadomości
     fd_set readfds;
     while (1) {
         FD_ZERO(&readfds);
@@ -194,12 +225,21 @@ void connect_to_server(const char *mode, const char *server_id, const char *ip, 
 
         // Ustawienie maksymalnego deskryptora pliku do select
         int maxfd = sock > STDIN_FILENO ? sock : STDIN_FILENO;
+
+        if (show_prompt) {
+            printf("[%s]: ", username);
+            fflush(stdout);
+            show_prompt = 0;
+        }
+
         select(maxfd+1, &readfds, NULL, NULL, NULL);
 
         // Odczyt z klawiatury i wysyłka do serwera
         if (FD_ISSET(STDIN_FILENO, &readfds)) {
+            // Wczytaj wiadomość od użytkownika
             if (fgets(buffer, sizeof(buffer), stdin) == NULL) break;
             send(sock, buffer, strlen(buffer), 0);
+            show_prompt = 1; // Po wysłaniu, potrzebujemy ponownie wyświetlić prompt
         }
         
         // Sprawdzenie, czy gniazdo serwera jest gotowe do odczytu
@@ -215,7 +255,9 @@ void connect_to_server(const char *mode, const char *server_id, const char *ip, 
 
             // Dodanie znaku końca łańcucha i wyświetlenie wiadomości
             buffer[n] = '\0';
+            printf("\r"); // usuwa ewentualny prompt z linii
             printf("%s", buffer);
+            show_prompt = 1; // Po wyświetleniu wiadomości, potrzebujemy ponownie wyświetlić prompt
         }
     }
     close(sock);

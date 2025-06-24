@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
@@ -15,6 +16,37 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <netdb.h>
+
+// Tablica przechowująca nazwy aktywnych klientów
+char *client_usernames[MAX_CLIENTS] = {0};
+
+// Pomocnicza funkcja do wysyłania powitania i historii czatu
+void send_welcome_and_history(int sd, const char *dbfile, const char *server_name) {
+    char welcome[256];
+    snprintf(welcome, sizeof(welcome), "===== Welcome to server %s! =====\n", server_name);
+
+    char history[4096] = "";
+    sqlite3 *db2;
+    if (sqlite3_open(dbfile, &db2) == SQLITE_OK) {
+        get_last_messages(db2, history, sizeof(history), 10);
+        sqlite3_close(db2);
+    }
+
+    // Separator historii
+    const char *separator = "...\n";
+
+    // Połącz powitanie, historię i separator w jeden bufor
+    char all[8192];
+    if (strlen(history) > 0)
+        snprintf(all, sizeof(all), "%s%s%s", welcome, history, separator);
+    else
+        snprintf(all, sizeof(all), "%s%s", welcome, separator);
+
+    // Wyślij długość powitania/historii jako uint32_t (sieciowo - big endian)
+    uint32_t len = htonl(strlen(all));
+    send(sd, &len, sizeof(len), 0);
+    send(sd, all, strlen(all), 0);
+}
 
 // Funkcja do obsługi przesyłania plików
 int handle_upload(int sd, const char *server_name, char *buffer) {
@@ -79,7 +111,7 @@ int handle_download(int sd, const char *server_name, char *buffer) {
     return 0;
 }
 
-// Funkcja do obsługi klienta
+// Funkcja do obsługi klienta - wysyłanie/odbieranie wiadomości, rejestracja, logowanie, przesyłanie plików
 void handle_client(
     int i,
     int sd,
@@ -126,8 +158,16 @@ void handle_client(
         }
 
         // Rejestracja użytkownika w bazie danych
-        register_user(db, username, hash_str, sd);
+        int reg_result = register_user(db, username, hash_str, sd);
+        if (reg_result == 0) {
+            // Sukces rejestracji, przypisanie username do obecnego połączenia
+            if (client_usernames[i]) free(client_usernames[i]);
+            client_usernames[i] = strdup(username);
+            printf("User %s connected\n", username);
 
+            // Wysyłka powitania i historii
+            send_welcome_and_history(sd, dbfile, server_name);
+        }
         sqlite3_close(db);
         return;
     }
@@ -143,8 +183,16 @@ void handle_client(
         }
 
         // Logowanie użytkownika w bazie danych
-        login_user(db, username, hash_str, sd);
+        int login_result = login_user(db, username, hash_str, sd);
+        if (login_result == 0) {
+            // Sukces logowania, przypisanie username do obecnego połączenia
+            if (client_usernames[i]) free(client_usernames[i]);
+            client_usernames[i] = strdup(username);
+            printf("User %s connected\n", username);
 
+            // Wysyłka powitania i historii
+            send_welcome_and_history(sd, dbfile, server_name);            
+        }
         sqlite3_close(db);
         return;
     }
@@ -152,6 +200,7 @@ void handle_client(
     // Obsługa polecenia UPLOAD
     if (strncmp(buffer, "UPLOAD ", 7) == 0) {
         handle_upload(sd, server_name, buffer);
+        // Dodać funkcję "<username> uploaded <filename>" do logów
         sqlite3_close(db);
         return;
     }
@@ -159,37 +208,46 @@ void handle_client(
     // Obsługa polecenia DOWNLOAD
     if (strncmp(buffer, "DOWNLOAD ", 9) == 0) {
         handle_download(sd, server_name, buffer);
+        // Dodać funkcję "<username> downloaded <filename>" do logów
         sqlite3_close(db);
         return;
     }
 
-    // Pobranie adresu IP klienta i portu
-    char client_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &client_addresses[i].sin_addr, client_ip, INET_ADDRSTRLEN);
-    int client_port = ntohs(client_addresses[i].sin_port);
+    // Pobranie adresu IP klienta i portu - już niepotrzebne, teraz rozpoznajemy klienta po jego nazwie użytkownika
+    //char client_ip[INET_ADDRSTRLEN];
+    //inet_ntop(AF_INET, &client_addresses[i].sin_addr, client_ip, INET_ADDRSTRLEN);
+    //int client_port = ntohs(client_addresses[i].sin_port);
 
-    // Przygotowanie wiadomości do wyświetlenia
-    buffer[valread] = '\0';
-    char message[BUFFER_SIZE + INET_ADDRSTRLEN + 16];
+    // Obsługa wiadomości czatowych
+    if (client_usernames[i]) {
+        
+        // Formatowanie wiadomości: [username]: <message>
+        buffer[valread] = '\0';
+        char message[BUFFER_SIZE + MAX_USERNAME_LEN + 8];
+        snprintf(message, sizeof(message), "[%s]: %s", client_usernames[i], buffer);
 
-    // Format: [IP:Port] Wiadomość
-    snprintf(message, sizeof(message), "[%s:%d] %s", client_ip, client_port, buffer);
+        // Wyświetlenie na serwerze
+        printf("%s", message);
 
-    // Wyświetlenie wiadomości na serwerze  
-    printf("%s", message);
+        // Zapis do historii czatu (funkcja save_chat_message powinna być zaimplementowana w database.c)
+        save_message(db, client_usernames[i], buffer);
 
-    // Rozsyłanie do innych klientów
-    for (int j = 0; j < MAX_CLIENTS; j++) {
-        int dest_sd = client_sockets[j];
-        if (dest_sd > 0 && dest_sd != sd) {
-            send(dest_sd, message, strlen(message), 0);
+        // Rozsyłanie do innych klientów
+        for (int j = 0; j < MAX_CLIENTS; j++) {
+            int dest_sd = client_sockets[j];
+            if (dest_sd > 0 && dest_sd != sd) {
+                send(dest_sd, message, strlen(message), 0);
+            }
         }
-    }
+    } else {
+        // Jeśli klient nie jest zalogowany, wysyłamy komunikat o błędzie (to nie powinno się nigdy zdarzyć)
+        send(sd, "USER NOT LOGGED IN\n", 14, 0);
+    }  
 
     sqlite3_close(db);
 }
 
-// Główna pętla serwera
+// Główna pętla serwera - dodawanie aktywnych gniazd klientów i obsługa połączeń
 void server_main_loop(int server_fd, const char *dbfile, const char *server_name) {
     
     // Tablica do przechowywania aktywnych gniazd klientów
@@ -205,6 +263,9 @@ void server_main_loop(int server_fd, const char *dbfile, const char *server_name
         perror("listen error");
         exit(EXIT_FAILURE);
     }
+
+    // Zerowanie tablicy nazw klientów
+    for (int i = 0; i < MAX_CLIENTS; i++) client_usernames[i] = NULL;
 
     while (1) {
         // Zerowanie zbioru fd_set i ustawianie gniazda serwera
@@ -250,9 +311,9 @@ void server_main_loop(int server_fd, const char *dbfile, const char *server_name
                     char client_ip[INET_ADDRSTRLEN];
                     inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
                     
-                    // Konwersja portu klienta na liczbę całkowitą i wyświetlenie informacji o nowym połączeniu
+                    // Konwersja portu klienta na liczbę całkowitą i wyświetlenie informacji o nowym oczekującym połączeniu
                     int client_port = ntohs(client_addr.sin_port);
-                    printf("New connection from %s:%d\n", client_ip, client_port);
+                    printf("Incoming connection from %s:%d\n", client_ip, client_port);
                     break;
                 }
             }
@@ -262,7 +323,7 @@ void server_main_loop(int server_fd, const char *dbfile, const char *server_name
         for (int i = 0; i < MAX_CLIENTS; i++) {
             int sd = client_sockets[i];
 
-            // FD_ISSET sprawdza, czy gniazdo klienta jest gotowe do odczytu        
+            // FD_ISSET sprawdza, czy gniazdo klienta jest gotowe do odczytu     
             if (sd > 0 && FD_ISSET(sd, &readfds)) {
                 int valread = read(sd, buffer, sizeof(buffer)-1);
                 handle_client(i, sd, dbfile, server_name, client_sockets, client_addresses, buffer, valread);

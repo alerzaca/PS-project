@@ -11,6 +11,7 @@
 #define MULTICAST_PORT 12345        // Port UDP multicast, na którym serwer będzie się ogłaszał
 #define TCP_PORT 8080               // Port TCP, na którym serwer będzie obsługiwał chat
 #define SERVER_ID_LEN 7             // 6 znaków heksadecymalnych + '\0'
+#define MAX_USERNAME_LEN 64         // Maksymalna długość nazwy użytkownika   
 
 // Struktura argumentów dla wątku multicast
 struct thread_args {
@@ -22,6 +23,9 @@ struct thread_args {
 
 // Funkcja multicastow
 void* multicast_broadcast(void *arg);
+
+// Funkcja pomocnicza do wysyłania powitania i historii czatu
+void send_welcome_and_history(int sd, const char *dbfile, const char *server_name);
 
 // Serwer TCP: główne funkcje
 void run_tcp_server(const char *dbfile, const char *server_name, char *server_id, int tcp_port);
