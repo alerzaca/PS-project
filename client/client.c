@@ -26,6 +26,26 @@ struct server_info {
 struct server_info servers[MAX_SERVERS];
 int server_count = 0;
 
+// Funkcja do pobrania nazwy użytkownika i hasła
+void get_user_credentials(char *username, size_t ulen, char *password, size_t plen) {
+    printf("Username: ");
+    fgets(username, ulen, stdin);
+    username[strcspn(username, "\n")] = '\0';
+    char *password_ptr = getpass("Password: ");
+    strncpy(password, password_ptr, plen - 1);
+    password[plen - 1] = '\0';
+}
+
+// Funkcja do wysyłania komendy logowania lub rejestracji do serwera
+int send_login_or_register(int sock, const char *mode, const char *username, const char *hash_str, char *buffer) {
+    snprintf(buffer, BUFFER_SIZE, "%s %s %s\n", mode, username, hash_str);
+    send(sock, buffer, strlen(buffer), 0);
+    int n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
+    if (n <= 0) return -1;
+    buffer[n] = '\0';
+    return 0;
+}
+
 // Dodanie serwera do listy unikalnych serwerów
 void add_server(const char *id, const char *name, const char *ip, int port) {
     for (int i = 0; i < server_count; ++i) {
@@ -44,6 +64,15 @@ void add_server(const char *id, const char *name, const char *ip, int port) {
 // Funkcja hashująca hasło użytkownika przed przesłaniem przez sieć
 void hash_password(const char *password, unsigned char *output) {
     SHA256((unsigned char*)password, strlen(password), output);
+}
+
+// Funkcja do hashowania hasła na format szesnastkowy
+void hash_password_hex(const char *password, char *hash_str) {
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256((unsigned char*)password, strlen(password), hash);
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
+        sprintf(hash_str + i * 2, "%02x", hash[i]);
+    hash_str[SHA256_DIGEST_LENGTH * 2] = '\0';
 }
 
 // Wyszukiwanie serwerów (multicast)
@@ -100,6 +129,64 @@ void search_servers() {
     close(sock);
 }
 
+// Odbiieranie powitania i historii czatu od serwera
+int receive_welcome_and_history(int sock) {
+    uint32_t len_net;
+    int received = 0;
+    while (received < sizeof(len_net)) {
+        int n = recv(sock, ((char*)&len_net) + received, sizeof(len_net) - received, 0);
+        if (n <= 0) return -1;
+        received += n;
+    }
+    uint32_t msg_len = ntohl(len_net);
+    char *welcome_buf = malloc(msg_len + 1);
+    if (!welcome_buf) return -1;
+    received = 0;
+    while (received < msg_len) {
+        int n = recv(sock, welcome_buf + received, msg_len - received, 0);
+        if (n <= 0) { free(welcome_buf); return -1; }
+        received += n;
+    }
+    welcome_buf[msg_len] = '\0';
+    printf("%s", welcome_buf);
+    free(welcome_buf);
+    return 0;
+}
+
+// Główna pętla czatu - wysyłanie i odbieranie wiadomości
+void chat_loop(int sock, const char *username) {
+    char buffer[BUFFER_SIZE];
+    int show_prompt = 1;
+    fd_set readfds;
+    while (1) {
+        FD_ZERO(&readfds);
+        FD_SET(STDIN_FILENO, &readfds);
+        FD_SET(sock, &readfds);
+        int maxfd = sock > STDIN_FILENO ? sock : STDIN_FILENO;
+        if (show_prompt) {
+            printf("[%s]: ", username);
+            fflush(stdout);
+            show_prompt = 0;
+        }
+        select(maxfd+1, &readfds, NULL, NULL, NULL);
+        if (FD_ISSET(STDIN_FILENO, &readfds)) {
+            if (fgets(buffer, sizeof(buffer), stdin) == NULL) break;
+            send(sock, buffer, strlen(buffer), 0);
+            show_prompt = 1;
+        }
+        if (FD_ISSET(sock, &readfds)) {
+            int n = recv(sock, buffer, sizeof(buffer)-1, 0);
+            if (n <= 0) {
+                printf("Disconnected from server\n");
+                break;
+            }
+            buffer[n] = '\0';
+            printf("\r%s", buffer);
+            show_prompt = 1;
+        }
+    }
+}
+
 // Tryb połączenia TCP z serwerem
 void connect_to_server(const char *mode, const char *server_id, const char *ip, int port) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -107,7 +194,6 @@ void connect_to_server(const char *mode, const char *server_id, const char *ip, 
         perror("socket error");
         return;
     }
-
     struct sockaddr_in serv_addr;
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
@@ -117,43 +203,21 @@ void connect_to_server(const char *mode, const char *server_id, const char *ip, 
         close(sock);
         return;
     }
-
     printf("Connecting to server [%s] at %s:%d...\n", server_id, ip, port);
     if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
         perror("connect error");
         close(sock);
         return;
     }
-
     printf("Connected to server [%s] (%s:%d)\n", server_id, ip, port);
+    char username[64], password[64], hash_str[SHA256_DIGEST_LENGTH*2+1], buffer[BUFFER_SIZE];
+    get_user_credentials(username, sizeof(username), password, sizeof(password));
+    hash_password_hex(password, hash_str);
 
-    // Pobranie nazwy użytkownika i hasła
-    char username[64], password[64], buffer[BUFFER_SIZE];
-
-    printf("Username: ");
-    fgets(username, sizeof(username), stdin);
-    username[strcspn(username, "\n")] = '\0';
-    
-    // Hasło wpisywane przez użytkownika nie wyświetla się w konsoli
-    char *password_ptr = getpass("Password: ");
-    strncpy(password, password_ptr, sizeof(password) - 1);
-    password[sizeof(password) - 1] = '\0';
-
-    // Hashowanie hasła przed wysłaniem przez sieć
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    hash_password(password, hash);
-    char hash_str[SHA256_DIGEST_LENGTH*2 + 1];
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        sprintf(hash_str + i*2, "%02x", hash[i]);
-    }
-    hash_str[SHA256_DIGEST_LENGTH*2] = '\0';
-
-    // Wysyłamy komendę: "LOGIN <login> <hasło>" lub "REGISTER <login> <hasło>"
+    // Logowanie lub rejestracja
     snprintf(buffer, sizeof(buffer), "%s %s %s\n", 
              (strcmp(mode, "login") == 0) ? "LOGIN" : "REGISTER", username, hash_str);
     send(sock, buffer, strlen(buffer), 0);
-
-    // Oczekiwanie na odpowiedź serwera
     int n = recv(sock, buffer, sizeof(buffer)-1, 0);
     if (n <= 0) {
         printf("Disconnected from server\n");
@@ -161,105 +225,33 @@ void connect_to_server(const char *mode, const char *server_id, const char *ip, 
         return;
     }
     buffer[n] = '\0';
-
     if (strcmp(mode, "login") == 0) {
         if (strcmp(buffer, "LOGIN_OK\n") == 0) {
             printf("Logged in successfully.\n");
-        }
-        else {
+        } else {
             printf("Invalid username or password.\n");
             close(sock);
             return;
         }
-    }
-    else if (strcmp(mode, "register") == 0) {
+    } else if (strcmp(mode, "register") == 0) {
         if (strcmp(buffer, "REGISTER_OK\n") == 0) {
             printf("Registered successfully.\n");
-        }
-        else if (strcmp(buffer, "REGISTER_EXISTS\n") == 0) {
+        } else if (strcmp(buffer, "REGISTER_EXISTS\n") == 0) {
             printf("This user already exists.\n");
             close(sock);
             return;
-        }
-        else {
+        } else {
             printf("Registration error.\n");
             close(sock);
             return;
         }
     }
     printf("\n");
-    
-    // Po zalogowaniu/rejestracji odbierz powitanie i historię czatu
-    // Najpierw odbierz pole długości (uint32_t, sieciowo)
-    uint32_t len_net;
-    int received = 0;
-    while (received < sizeof(len_net)) {
-        int n = recv(sock, ((char*)&len_net) + received, sizeof(len_net) - received, 0);
-        if (n <= 0) { printf("Disconnected from server\n"); close(sock); return; }
-        received += n;
+    if (receive_welcome_and_history(sock) != 0) {
+        close(sock);
+        return;
     }
-    uint32_t msg_len = ntohl(len_net);
-
-    // Teraz odbierz dokładnie msg_len bajtów
-    char *welcome_buf = malloc(msg_len + 1);
-    if (!welcome_buf) { printf("Memory error\n"); close(sock); return; }
-    received = 0;
-    while (received < msg_len) {
-        int n = recv(sock, welcome_buf + received, msg_len - received, 0);
-        if (n <= 0) { printf("Disconnected from server\n"); free(welcome_buf); close(sock); return; }
-        received += n;
-    }
-    welcome_buf[msg_len] = '\0';
-    printf("%s", welcome_buf);
-    free(welcome_buf);
-
-    // Zmienna pomocnicza - czy potrzebujemy wyświetlić prompt
-    int show_prompt = 1; 
-
-    // Główny chat - wysyłanie i odbieranie wiadomości
-    fd_set readfds;
-    while (1) {
-        FD_ZERO(&readfds);
-        FD_SET(STDIN_FILENO, &readfds);
-        FD_SET(sock, &readfds);
-
-        // Ustawienie maksymalnego deskryptora pliku do select
-        int maxfd = sock > STDIN_FILENO ? sock : STDIN_FILENO;
-
-        if (show_prompt) {
-            printf("[%s]: ", username);
-            fflush(stdout);
-            show_prompt = 0;
-        }
-
-        select(maxfd+1, &readfds, NULL, NULL, NULL);
-
-        // Odczyt z klawiatury i wysyłka do serwera
-        if (FD_ISSET(STDIN_FILENO, &readfds)) {
-            // Wczytaj wiadomość od użytkownika
-            if (fgets(buffer, sizeof(buffer), stdin) == NULL) break;
-            send(sock, buffer, strlen(buffer), 0);
-            show_prompt = 1; // Po wysłaniu, potrzebujemy ponownie wyświetlić prompt
-        }
-        
-        // Sprawdzenie, czy gniazdo serwera jest gotowe do odczytu
-        // jeśli tak, to odbieramy wiadomość
-        if (FD_ISSET(sock, &readfds)) {
-            int n = recv(sock, buffer, sizeof(buffer)-1, 0);
-
-            // Sprawdzenie błędów odczytu, jeśli n <= 0, to wystąpił błąd lub serwer zamknął połączenie
-            if (n <= 0) {
-                printf("Disconnected from server\n");
-                break;
-            }
-
-            // Dodanie znaku końca łańcucha i wyświetlenie wiadomości
-            buffer[n] = '\0';
-            printf("\r"); // usuwa ewentualny prompt z linii
-            printf("%s", buffer);
-            show_prompt = 1; // Po wyświetleniu wiadomości, potrzebujemy ponownie wyświetlić prompt
-        }
-    }
+    chat_loop(sock, username);
     close(sock);
 }
 
@@ -281,9 +273,79 @@ void handle_connect_mode(int argc, char *argv[]) {
     }
 }
 
-// nowa funkcja !
+// Logika logowania do serwera plików
+int login_to_file_server(int sock, char *username, char *password, char *buffer) {
+    char hash_str[SHA256_DIGEST_LENGTH*2 + 1];
+    hash_password_hex(password, hash_str);
+    snprintf(buffer, BUFFER_SIZE, "LOGIN %s %s\n", username, hash_str);
+    send(sock, buffer, strlen(buffer), 0);
+    int n = recv(sock, buffer, BUFFER_SIZE-1, 0);
+    if (n <= 0 || strncmp(buffer, "LOGIN_OK\n", 9) != 0) {
+        printf("Login failed\n");
+        return 1;
+    }
+    return 0;
+}
+
+// Logika przesyłania plików
+int upload_file(int sock, const char *filename, char *buffer) {
+    FILE *file = fopen(filename, "rb");
+    if (!file) {
+        perror("fopen");
+        return 1;
+    }
+    fseek(file, 0, SEEK_END);
+    int filesize = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    snprintf(buffer, BUFFER_SIZE, "UPLOAD %s %d\n", filename, filesize);
+    send(sock, buffer, strlen(buffer), 0);
+    int n = recv(sock, buffer, BUFFER_SIZE-1, 0);
+    if (n <= 0 || strncmp(buffer, "UPLOAD_OK", 9) != 0) {
+        printf("Upload failed\n");
+        fclose(file);
+        return 1;
+    }
+    while ((n = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
+        send(sock, buffer, n, 0);
+    }
+    fclose(file);
+    printf("File uploaded successfully\n");
+    return 0;
+}
+
+// Logika pobierania plików
+int download_file(int sock, const char *filename, char *buffer) {
+    snprintf(buffer, BUFFER_SIZE, "DOWNLOAD %s\n", filename);
+    send(sock, buffer, strlen(buffer), 0);
+    int n = recv(sock, buffer, BUFFER_SIZE-1, 0);
+    if (n <= 0) {
+        printf("Download failed\n");
+        return 1;
+    }
+    int filesize;
+    if (sscanf(buffer, "DOWNLOAD %d", &filesize) != 1) {
+        printf("Download failed\n");
+        return 1;
+    }
+    FILE *file = fopen(filename, "wb");
+    if (!file) {
+        perror("fopen");
+        return 1;
+    }
+    int total = 0;
+    while (total < filesize) {
+        n = recv(sock, buffer, BUFFER_SIZE, 0);
+        if (n <= 0) break;
+        fwrite(buffer, 1, n, file);
+        total += n;
+    }
+    fclose(file);
+    printf("File downloaded successfully\n");
+    return 0;
+}
+
+// Obsługa przesyłania plików (upload/download)
 int handle_file_transfer(int argc, char *argv[]) {
-    // Wysłanie pliku na serwer / Pobranie pliku z serwera
     if ((argc == 6) && (strcmp(argv[1], "upload") == 0 || strcmp(argv[1], "download") == 0)) {
         const char *mode = argv[1];
         const char *server_id = argv[2];
@@ -303,96 +365,22 @@ int handle_file_transfer(int argc, char *argv[]) {
             return 1;
         }
 
-        // Pobierz username i password
         char username[64], password[64], buffer[BUFFER_SIZE];
-        printf("Username: ");
-        fgets(username, sizeof(username), stdin);
-        username[strcspn(username, "\n")] = '\0';
-        char *password_ptr = getpass("Password: ");
-        strncpy(password, password_ptr, sizeof(password)-1);
-        password[sizeof(password)-1] = '\0';
-
-        // Hashowanie hasła przed wysłaniem przez sieć
-        unsigned char hash[SHA256_DIGEST_LENGTH];
-        hash_password(password, hash);
-        char hash_str[SHA256_DIGEST_LENGTH*2 + 1];
-        for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-            sprintf(hash_str + i*2, "%02x", hash[i]);
-        }
-        hash_str[SHA256_DIGEST_LENGTH*2] = '\0';
-
-        // Wyślij LOGIN
-        snprintf(buffer, sizeof(buffer), "LOGIN %s %s\n", username, hash_str);
-        send(sock, buffer, strlen(buffer), 0);
-
-        // Odczytaj odpowiedź serwera
-        int n = recv(sock, buffer, sizeof(buffer)-1, 0);
-        if (n <= 0 || strncmp(buffer, "LOGIN_OK\n", 9) != 0) {
-            printf("Login failed\n");
+        get_user_credentials(username, sizeof(username), password, sizeof(password));
+        if (login_to_file_server(sock, username, password, buffer) != 0) {
             close(sock);
             return 1;
         }
-
-        // Obsługa upload/download
+        int result = 0;
         if (strcmp(mode, "upload") == 0) {
-            FILE *file = fopen(filename, "rb");
-            if (!file) {
-                perror("fopen");
-                close(sock);
-                return 1;
-            }
-            fseek(file, 0, SEEK_END);
-            int filesize = ftell(file);
-            fseek(file, 0, SEEK_SET);
-            snprintf(buffer, sizeof(buffer), "UPLOAD %s %d\n", filename, filesize);
-            send(sock, buffer, strlen(buffer), 0);
-            n = recv(sock, buffer, sizeof(buffer)-1, 0);
-            if (n <= 0 || strncmp(buffer, "UPLOAD_OK", 9) != 0) {
-                printf("Upload failed\n");
-                fclose(file);
-                close(sock);
-                return 1;
-            }
-            while ((n = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
-                send(sock, buffer, n, 0);
-            }
-            fclose(file);
-            printf("File uploaded successfully\n");
-        }
-        else if (strcmp(mode, "download") == 0) {
-            snprintf(buffer, sizeof(buffer), "DOWNLOAD %s\n", filename);
-            send(sock, buffer, strlen(buffer), 0);
-            n = recv(sock, buffer, sizeof(buffer)-1, 0);
-            if (n <= 0) {
-                printf("Download failed\n");
-                close(sock);
-                return 1;
-            }
-            int filesize;
-            if (sscanf(buffer, "DOWNLOAD %d", &filesize) != 1) {
-                printf("Download failed\n");
-                close(sock);
-                return 1;
-            }
-            FILE *file = fopen(filename, "wb");
-            if (!file) {
-                perror("fopen");
-                close(sock);
-                return 1;
-            }
-            int total = 0;
-            while (total < filesize) {
-                n = recv(sock, buffer, BUFFER_SIZE, 0);
-                if (n <= 0) break;
-                fwrite(buffer, 1, n, file);
-                total += n;
-            }
-            fclose(file);
-            printf("File downloaded successfully\n");
+            result = upload_file(sock, filename, buffer);
+        } else if (strcmp(mode, "download") == 0) {
+            result = download_file(sock, filename, buffer);
         }
         close(sock);
-        return 0;
+        exit(result);
     }
+    return 0;
 }
 
 // nowa funkcja !
