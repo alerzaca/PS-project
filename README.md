@@ -14,7 +14,7 @@ sudo apt install libsqlite3-dev libssl-dev
 1. Server requires to provide your own room name and network interface (np. `eth0`, `wlan0`). Creating a server means essentially creating a database file (and a shared folder) for the new server.
 ```
 ./server create <name>
-./server start <name> <interface>
+./server start <name> <interface> <port>
 ```
 2. Client requires to provide room ID, IP address, and port. Those can be obtained by running program with a "search" argument in order to scan network for available servers.
 ```
