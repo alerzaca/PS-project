@@ -11,3 +11,7 @@ server
 # Ignore shared and database directories
 server/shared/
 server/database/
+
+*.db
+*.txt
+*_onefileversion
