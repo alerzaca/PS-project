@@ -5,6 +5,7 @@
 #include <ifaddrs.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <sys/stat.h>
 
 #include "utils.h"
 #include "database.h"
@@ -19,6 +20,10 @@ int main(int argc, char *argv[]) {
         strncpy(server_name, argv[2], sizeof(server_name)-1);
 
         char dbfile[DBFILE_MAX];
+        struct stat st = {0};
+        if (stat("database", &st) == -1) {
+            mkdir("database", 0755);
+        }
         snprintf(dbfile, sizeof(dbfile), "database/%s.db", server_name);
 
         // Utworzenie bazy danych i tabeli serwera
