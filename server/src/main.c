@@ -28,6 +28,9 @@ int main(int argc, char *argv[]) {
 
         // Utworzenie bazy danych i tabeli serwera
         create_database(dbfile, server_name);
+                
+        // Przygotowanie folderu wspłdzielonego
+        ensure_shared_folders(server_name);
     }
 
     else if (argc == 5 && strcmp(argv[1], "start") == 0) {
@@ -55,9 +58,6 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "get info from fatabase error\n");
             exit(1);
         }
-
-        // Przygotowanie folderu wspłdzielonego
-        ensure_shared_folders(server_name);
 
         // Informacja o pomyślnym odczytaniu danych i startowanie faktcznego serwera
         printf("Starting serwer %s [ID: %s, created: %s] ...\n", server_name, server_id, created);
